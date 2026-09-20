@@ -1,0 +1,14 @@
+[Unit]
+Description=MECHREVO Hardware Power and Thermal Control Daemon
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mechrevo-ctld
+Restart=on-failure
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
