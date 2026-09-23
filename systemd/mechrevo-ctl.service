@@ -1,14 +1,15 @@
 [Unit]
 Description=MECHREVO Hardware Power and Thermal Control Daemon
-After=multi-user.target
+After=basic.target systemd-modules-load.service
+Before=display-manager.service
+Conflicts=power-profiles-daemon.service
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/mechrevo-ctld
 Restart=on-failure
-RestartSec=5s
+RestartSec=3s
 User=root
 
 [Install]
 WantedBy=multi-user.target
-

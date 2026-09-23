@@ -7,26 +7,28 @@
 
 case "$1" in
   post)
-    # Give EC and kernel drivers a brief moment to finish hardware power-on sequence
+    # Give EC and PCIe power rails a brief moment to finish resume power-on
     sleep 0.5
 
-    # Request daemon to re-apply the last active profile
-    if [ -e /usr/local/bin/python3 ]; then
-      PYTHON_BIN="/usr/local/bin/python3"
-    else
-      PYTHON_BIN="python3"
+    # Locate binary
+    CTL_BIN=""
+    if command -v mechrevo-ctl >/dev/null 2>&1; then
+      CTL_BIN="mechrevo-ctl"
+    elif [ -x /usr/local/bin/mechrevo-ctl ]; then
+      CTL_BIN="/usr/local/bin/mechrevo-ctl"
+    elif [ -x /usr/bin/mechrevo-ctl ]; then
+      CTL_BIN="/usr/bin/mechrevo-ctl"
     fi
 
-    $PYTHON_BIN -c '
-import json, socket
-try:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(2.0)
-        s.connect("/run/mechrevo-ctl.sock")
-        s.sendall(json.dumps({"action": "reload_profile"}).encode("utf-8"))
-except Exception:
-    pass
-' 2>/dev/null || true
+    if [ -n "$CTL_BIN" ]; then
+      # Wait up to 1.5s for daemon socket to be ready after wakeup
+      for _ in 1 2 3 4 5; do
+        if [ -S /run/mechrevo-ctl.sock ]; then
+          break
+        fi
+        sleep 0.3
+      done
+      $CTL_BIN reload-profile >/dev/null 2>&1 || true
+    fi
     ;;
 esac
-
