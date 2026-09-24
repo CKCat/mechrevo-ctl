@@ -398,7 +398,10 @@ impl MechrevoDaemon {
                         self.save_state();
                         IpcResponse {
                             success: true,
-                            message: Some(format!("Battery charge threshold set to {}%", threshold)),
+                            message: Some(format!(
+                                "Battery charge threshold set to {}% (Note: If battery continues charging past limit, toggle conservation mode once in BIOS/Windows to initialize EC register 0x087F)",
+                                threshold
+                            )),
                             error: None,
                         }
                     }
@@ -540,6 +543,10 @@ mod tests {
         let res_str = daemon.handle_ipc_request(r#"{"action":"battery","threshold":80}"#);
         let resp: IpcResponse = serde_json::from_str(&res_str).unwrap();
         assert!(resp.success);
+        assert!(
+            resp.message.as_ref().unwrap().contains("0x087F"),
+            "Battery response must provide EC register 0x087F firmware guidance"
+        );
 
         // 3. Invalid command
         let res_str = daemon.handle_ipc_request(r#"{"action":"unknown"}"#);

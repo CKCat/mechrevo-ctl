@@ -86,10 +86,10 @@ fn send_ipc_command_with_retry(req: &IpcRequest, max_retries: usize) -> Option<I
             continue;
         }
 
-        let mut buf = vec![0u8; 4096];
-        if let Ok(n) = stream.read(&mut buf) {
-            if n > 0 {
-                if let Ok(resp) = serde_json::from_slice(&buf[..n]) {
+        let mut buf = Vec::new();
+        if let Ok(_) = stream.read_to_end(&mut buf) {
+            if !buf.is_empty() {
+                if let Ok(resp) = serde_json::from_slice(&buf) {
                     return Some(resp);
                 }
             }
@@ -317,7 +317,10 @@ fn cmd_battery(ctx: &SysfsContext, threshold: u32) -> Result<()> {
         let _ = std::fs::write(&state_file, json);
     }
 
-    println!("[+] Battery charge threshold set to {}%", threshold);
+    println!(
+        "[+] Battery charge threshold set to {}% (Note: If battery continues charging past limit, toggle conservation mode once in BIOS/Windows to initialize EC register 0x087F)",
+        threshold
+    );
     Ok(())
 }
 

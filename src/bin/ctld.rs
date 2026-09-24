@@ -175,6 +175,8 @@ fn run_daemon() -> std::io::Result<()> {
                         let daemon_clone = daemon.clone();
                         // Spawn isolated worker thread with 1.0s timeout to prevent Slowloris DoS
                         std::thread::spawn(move || {
+                            // 显式切为阻塞模式，确保 1.0s 超时在所有 Unix 平台与内核版本均 100% 生效
+                            let _ = stream.set_nonblocking(false);
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                             let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
 
@@ -187,6 +189,7 @@ fn run_daemon() -> std::io::Result<()> {
                                         d.handle_ipc_request(&payload)
                                     };
                                     let _ = stream.write_all(response_str.as_bytes());
+                                    let _ = stream.shutdown(std::net::Shutdown::Write);
                                 }
                             }
                         });

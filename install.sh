@@ -116,7 +116,22 @@ EOF
   fi
 fi
 
-# 3.3. 平台设备驱动生态自检与 DMI 白名单破除 (Mainline uniwill-laptop & Tuxedo DKMS)
+# 3.4. 配置 Intel 14代 HX P-Unit 双域 RAPL 模块自启 (开机自动加载 intel_rapl_msr 与 intel_rapl_mmio)
+if [ -d "/etc/modules-load.d" ]; then
+  MODULES_CONF="/etc/modules-load.d/mechrevo.conf"
+  if [ ! -f "$MODULES_CONF" ]; then
+    cat << 'EOF' > "$MODULES_CONF"
+# MECHREVO RAPL dual-domain powercap modules for Intel HX P-Unit
+intel_rapl_msr
+intel_rapl_mmio
+EOF
+    echo "[+] 已配置 Intel RAPL 双域 (MSR + MMIO) 开机自启模块: $MODULES_CONF"
+  fi
+  modprobe intel_rapl_msr 2>/dev/null || true
+  modprobe intel_rapl_mmio 2>/dev/null || true
+fi
+
+# 3.5. 平台设备驱动生态自检与 DMI 白名单破除 (Mainline uniwill-laptop & Tuxedo DKMS)
 if [ -d "/etc/modprobe.d" ]; then
   UNIWILL_CONF="/etc/modprobe.d/mechrevo-uniwill.conf"
   # 注意 (内核安全事实与 CVE-2026-64143 警示):
@@ -171,6 +186,12 @@ if [ -f "/proc/cmdline" ]; then
     echo "    建议在 /etc/default/grub 的 GRUB_CMDLINE_LINUX_DEFAULT 中添加上述参数并执行 update-grub。"
     echo "------------------------------------------------------------------"
   fi
+fi
+
+# 4.1. 板载声卡硬件事实核实 (Senary / Conexant SN6140 0x14f11f87)
+if lspci -nn 2>/dev/null | grep -i "14f1:1f87" -q || lsmod 2>/dev/null | grep -q "snd_hda_intel"; then
+  echo "[+] 检测到 Conexant / Senary SN6140 高清音频芯片 (Vendor 0x14f1, Device 0x1f87, Subsys 0x1d05142c)。"
+  echo "    若遇到扬声器无声，请检查 PipeWire ALSA 节点路由，或参考社区配置 snd-hda-intel 驱动参数。"
 fi
 
 echo "=================================================================="

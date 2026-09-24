@@ -109,6 +109,14 @@ pub struct HwmonSnapshot {
     pub fan2_rpm: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HwmonPwmControls {
+    pub pwm1_enable_path: String,
+    pub pwm1_path: Option<String>,
+    pub pwm2_enable_path: Option<String>,
+    pub pwm2_path: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct FanDriver {
     ctx: SysfsContext,
@@ -128,23 +136,141 @@ impl FanDriver {
         None
     }
 
+    /// Finds standard Linux kernel hwmon PWM fan controls (e.g. uniwill-laptop mainline driver).
+    pub fn find_hwmon_pwm_controls(&self) -> Option<HwmonPwmControls> {
+        let base = self.ctx.resolve(HWMON_BASE_PATH);
+        if !base.exists() {
+            return None;
+        }
+
+        let Ok(entries) = std::fs::read_dir(&base) else {
+            return None;
+        };
+
+        let mut sorted_entries: Vec<_> = entries.flatten().collect();
+        sorted_entries.sort_by_key(|e| e.file_name());
+
+        let mut fallback_candidate = None;
+
+        for entry in sorted_entries {
+            let dir_name = entry.file_name();
+            let dir_str = dir_name.to_string_lossy();
+            if !dir_str.starts_with("hwmon") {
+                continue;
+            }
+            let hwmon_path = format!("{}/{}", HWMON_BASE_PATH, dir_str);
+            let pwm1_en_path = format!("{}/pwm1_enable", hwmon_path);
+
+            if self.ctx.exists(&pwm1_en_path) {
+                let pwm1_path = format!("{}/pwm1", hwmon_path);
+                let pwm2_en_path = format!("{}/pwm2_enable", hwmon_path);
+                let pwm2_path = format!("{}/pwm2", hwmon_path);
+
+                let controls = HwmonPwmControls {
+                    pwm1_enable_path: pwm1_en_path,
+                    pwm1_path: if self.ctx.exists(&pwm1_path) {
+                        Some(pwm1_path)
+                    } else {
+                        None
+                    },
+                    pwm2_enable_path: if self.ctx.exists(&pwm2_en_path) {
+                        Some(pwm2_en_path)
+                    } else {
+                        None
+                    },
+                    pwm2_path: if self.ctx.exists(&pwm2_path) {
+                        Some(pwm2_path)
+                    } else {
+                        None
+                    },
+                };
+
+                let name_path = format!("{}/name", hwmon_path);
+                let driver_name = self
+                    .ctx
+                    .read_text(&name_path)
+                    .map(|s| s.trim().to_lowercase())
+                    .unwrap_or_default();
+
+                // 优先绑定 Uniwill / Tuxedo / Clevo / Mechrevo 原厂平台驱动
+                if driver_name.contains("uniwill")
+                    || driver_name.contains("tuxedo")
+                    || driver_name.contains("clevo")
+                    || driver_name.contains("mechrevo")
+                {
+                    return Some(controls);
+                }
+
+                if fallback_candidate.is_none() {
+                    fallback_candidate = Some(controls);
+                }
+            }
+        }
+
+        fallback_candidate
+    }
+
     pub fn get_fan_boost(&self) -> Option<bool> {
         if let Some(node) = self.find_fan_boost_node() {
             if let Ok(content) = self.ctx.read_text(&node) {
                 return Some(content.trim() == "1");
             }
         }
+
+        if let Some(pwm) = self.find_hwmon_pwm_controls() {
+            if let Ok(enable_str) = self.ctx.read_text(&pwm.pwm1_enable_path) {
+                let enable_val = enable_str.trim();
+                if enable_val == "1" {
+                    if let Some(ref p1) = pwm.pwm1_path {
+                        if let Ok(pwm_str) = self.ctx.read_text(p1) {
+                            if let Ok(val) = pwm_str.trim().parse::<u32>() {
+                                return Some(val >= 250);
+                            }
+                        }
+                    }
+                    return Some(true);
+                } else if enable_val == "2" {
+                    return Some(false);
+                }
+            }
+        }
+
         None
     }
 
     pub fn set_fan_boost(&self, enable: bool) -> Result<()> {
-        let node = self.find_fan_boost_node().ok_or_else(|| {
-            MechrevoError::HardwareInterface(
-                "No supported fan boost interface found in sysfs (requires tuxedo-drivers or supported OEM module)".to_string(),
-            )
-        })?;
-        let val = if enable { "1\n" } else { "0\n" };
-        self.ctx.write_text(&node, val)
+        if let Some(node) = self.find_fan_boost_node() {
+            let val = if enable { "1\n" } else { "0\n" };
+            return self.ctx.write_text(&node, val);
+        }
+
+        if let Some(pwm) = self.find_hwmon_pwm_controls() {
+            if enable {
+                // 工业级硬件时序：先进入手动接管模式 (pwmX_enable = 1)，再拉满 255 占空比
+                self.ctx.write_text(&pwm.pwm1_enable_path, "1\n")?;
+                if let Some(ref p2_en) = pwm.pwm2_enable_path {
+                    let _ = self.ctx.write_text(p2_en, "1\n");
+                }
+                if let Some(ref p1) = pwm.pwm1_path {
+                    let _ = self.ctx.write_text(p1, "255\n");
+                }
+                if let Some(ref p2) = pwm.pwm2_path {
+                    let _ = self.ctx.write_text(p2, "255\n");
+                }
+                return Ok(());
+            } else {
+                // 恢复 EC 自动温控曲线接管 (pwmX_enable = 2)
+                self.ctx.write_text(&pwm.pwm1_enable_path, "2\n")?;
+                if let Some(ref p2_en) = pwm.pwm2_enable_path {
+                    let _ = self.ctx.write_text(p2_en, "2\n");
+                }
+                return Ok(());
+            }
+        }
+
+        Err(MechrevoError::HardwareInterface(
+            "No supported fan boost interface found in sysfs (requires tuxedo-drivers or hwmon pwm support)".to_string(),
+        ))
     }
 
     /// Universally reads CPU Package temperature and dual fan speeds from /sys/class/hwmon.
@@ -238,6 +364,14 @@ impl ProfileManager {
         }
     }
 
+    /// Determines whether NVIDIA GPU Persistence Mode should be enabled for a given profile.
+    /// To preserve PCIe RTD3 D3cold deep sleep (0W idle power consumption), Persistence Mode
+    /// is ONLY enabled in Turbo (maximum performance) mode. In Balanced and Office modes,
+    /// it is kept disabled so the dGPU can power down when no 3D/CUDA workloads are active.
+    pub fn should_enable_gpu_persistence(profile_name: &str) -> bool {
+        profile_name.eq_ignore_ascii_case("turbo")
+    }
+
     /// Accesses the underlying FanDriver instance.
     pub fn fan(&self) -> &FanDriver {
         &self.fan
@@ -292,8 +426,9 @@ impl ProfileManager {
         let _ = self.cpu.set_energy_performance_preference(epp_pref);
 
         // 3. GPU TGP limits & persistence mode toggle
+        // 遵循 PCIe RTD3 节能规范：仅在 Turbo 满血模式开启 Persistence Mode，日常平衡模式允许独显深睡眠
         if self.gpu.is_available() {
-            let enable_pm = profile.name.to_lowercase() != "office";
+            let enable_pm = Self::should_enable_gpu_persistence(&profile.name);
             let _ = self
                 .gpu
                 .set_power_limit(profile.gpu_tgp_w, enable_pm);
@@ -624,6 +759,93 @@ mod tests {
             res.message.contains("EC fan curve not synchronized"),
             "Message must alert user that EC fan curve is not synchronized when ACPI node is absent: got '{}'",
             res.message
+        );
+    }
+
+    #[test]
+    fn test_profile_manager_gpu_persistence_mode_policy() {
+        // Core kernel power management requirement:
+        // In Balanced and Office modes, Persistence Mode must NOT be enabled,
+        // allowing hybrid graphics dGPU to enter PCIe RTD3 D3cold deep sleep (0W idle).
+        // Only Turbo mode (maximum performance release) should activate Persistence Mode.
+        assert!(!ProfileManager::should_enable_gpu_persistence("office"));
+        assert!(!ProfileManager::should_enable_gpu_persistence("balanced"));
+        assert!(!ProfileManager::should_enable_gpu_persistence("Office"));
+        assert!(!ProfileManager::should_enable_gpu_persistence("Balanced"));
+
+        assert!(ProfileManager::should_enable_gpu_persistence("turbo"));
+        assert!(ProfileManager::should_enable_gpu_persistence("Turbo"));
+    }
+
+    #[test]
+    fn test_fan_driver_hwmon_pwm_boost_fallback() {
+        let dir = tempdir().unwrap();
+        let ctx = SysfsContext::with_root(dir.path());
+
+        // Note: NO fan_boost candidate node is created!
+        // Setup mock hwmon device for uniwill_laptop (simulating Linux 6.19+ mainline kernel driver)
+        let hwmon_dir = ctx.resolve("/sys/class/hwmon/hwmon1");
+        std::fs::create_dir_all(&hwmon_dir).unwrap();
+        std::fs::write(hwmon_dir.join("name"), "uniwill_laptop\n").unwrap();
+        std::fs::write(hwmon_dir.join("pwm1_enable"), "2\n").unwrap(); // 2 = automatic EC mode
+        std::fs::write(hwmon_dir.join("pwm1"), "120\n").unwrap();
+        std::fs::write(hwmon_dir.join("pwm2_enable"), "2\n").unwrap();
+        std::fs::write(hwmon_dir.join("pwm2"), "120\n").unwrap();
+
+        let fan = FanDriver::new(ctx.clone());
+
+        // Initially in auto mode (pwm1_enable=2) -> fan boost must report Some(false)
+        assert_eq!(fan.get_fan_boost(), Some(false));
+
+        // Enable fan boost -> must write 255 to pwm1/pwm2 and 1 to pwm1_enable/pwm2_enable
+        fan.set_fan_boost(true).unwrap();
+
+        let p1_en = std::fs::read_to_string(hwmon_dir.join("pwm1_enable")).unwrap();
+        let p1_val = std::fs::read_to_string(hwmon_dir.join("pwm1")).unwrap();
+        let p2_en = std::fs::read_to_string(hwmon_dir.join("pwm2_enable")).unwrap();
+        let p2_val = std::fs::read_to_string(hwmon_dir.join("pwm2")).unwrap();
+
+        assert_eq!(p1_en.trim(), "1");
+        assert_eq!(p1_val.trim(), "255");
+        assert_eq!(p2_en.trim(), "1");
+        assert_eq!(p2_val.trim(), "255");
+        assert_eq!(fan.get_fan_boost(), Some(true));
+
+        // Disable fan boost -> must restore automatic mode (pwm1_enable=2, pwm2_enable=2)
+        fan.set_fan_boost(false).unwrap();
+
+        let p1_en_restored = std::fs::read_to_string(hwmon_dir.join("pwm1_enable")).unwrap();
+        let p2_en_restored = std::fs::read_to_string(hwmon_dir.join("pwm2_enable")).unwrap();
+        assert_eq!(p1_en_restored.trim(), "2");
+        assert_eq!(p2_en_restored.trim(), "2");
+        assert_eq!(fan.get_fan_boost(), Some(false));
+    }
+
+    #[test]
+    fn test_fan_driver_hwmon_prefers_uniwill_platform_name() {
+        let dir = tempdir().unwrap();
+        let ctx = SysfsContext::with_root(dir.path());
+
+        // hwmon0: generic third-party sensor/fan
+        let hwmon0 = ctx.resolve("/sys/class/hwmon/hwmon0");
+        std::fs::create_dir_all(&hwmon0).unwrap();
+        std::fs::write(hwmon0.join("name"), "generic_sensor\n").unwrap();
+        std::fs::write(hwmon0.join("pwm1_enable"), "2\n").unwrap();
+        std::fs::write(hwmon0.join("pwm1"), "100\n").unwrap();
+
+        // hwmon1: official uniwill laptop platform driver
+        let hwmon1 = ctx.resolve("/sys/class/hwmon/hwmon1");
+        std::fs::create_dir_all(&hwmon1).unwrap();
+        std::fs::write(hwmon1.join("name"), "uniwill_laptop\n").unwrap();
+        std::fs::write(hwmon1.join("pwm1_enable"), "2\n").unwrap();
+        std::fs::write(hwmon1.join("pwm1"), "150\n").unwrap();
+
+        let fan = FanDriver::new(ctx.clone());
+        let controls = fan.find_hwmon_pwm_controls().expect("Should find hwmon controls");
+        assert!(
+            controls.pwm1_enable_path.contains("hwmon1"),
+            "FanDriver must prioritize uniwill_laptop over generic hwmon device, got: {}",
+            controls.pwm1_enable_path
         );
     }
 }
