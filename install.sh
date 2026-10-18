@@ -14,27 +14,42 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "[*] 检测 Rust 编译构建工具链..."
+echo "[*] 检测 Rust 编译构建工具链与二进制文件..."
 
-CARGO_BIN="$(command -v cargo || true)"
-if [ -z "$CARGO_BIN" ]; then
-  if [ -n "$SUDO_USER" ] && [ -x "$(eval echo ~"$SUDO_USER")/.cargo/bin/cargo" ]; then
-    CARGO_BIN="$(eval echo ~"$SUDO_USER")/.cargo/bin/cargo"
-    export PATH="$(eval echo ~"$SUDO_USER")/.cargo/bin:$PATH"
-  elif [ -x "$HOME/.cargo/bin/cargo" ]; then
-    CARGO_BIN="$HOME/.cargo/bin/cargo"
-    export PATH="$HOME/.cargo/bin:$PATH"
+# 继承触发 sudo 的普通用户 Rustup 与 Cargo 环境变量，解决 root 下未配置 default toolchain 的问题
+if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  USER_HOME="$(eval echo ~"$SUDO_USER")"
+  if [ -d "$USER_HOME/.rustup" ]; then
+    export RUSTUP_HOME="$USER_HOME/.rustup"
+  fi
+  if [ -d "$USER_HOME/.cargo" ]; then
+    export CARGO_HOME="$USER_HOME/.cargo"
+    export PATH="$USER_HOME/.cargo/bin:$PATH"
+  fi
+elif [ -d "$HOME/.cargo/bin" ]; then
+  export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+# 若已存在预编译完成的原生 Release 二进制文件，直接进行部署安装
+if [ -f "target/release/mechrevo-ctl" ] && [ -f "target/release/mechrevo-ctld" ]; then
+  echo "[+] 检测到已就绪的原生 Release 二进制文件，直接使用当前构建产物。"
+else
+  CARGO_BIN="$(command -v cargo || true)"
+  if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
+    echo "[!] 错误: 未检测到 Rust 工具链 (cargo)，且 target/release/ 目录下无构建产物。"
+    echo "    请先安装 Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    exit 1
+  fi
+
+  echo "[*] 使用 Rust 编译器构建原生 Release 二进制文件 (cargo build --release)..."
+  if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    runuser -u "$SUDO_USER" -- env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" "$CARGO_BIN" build --release 2>/dev/null \
+      || sudo -u "$SUDO_USER" env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" "$CARGO_BIN" build --release 2>/dev/null \
+      || $CARGO_BIN build --release
+  else
+    $CARGO_BIN build --release
   fi
 fi
-
-if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
-  echo "[!] 错误: 未检测到 Rust 工具链 (cargo)。"
-  echo "    请先安装 Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-  exit 1
-fi
-
-echo "[*] 使用 Rust 编译器构建原生 Release 二进制文件 (cargo build --release)..."
-$CARGO_BIN build --release
 
 BIN_DIR="/usr/local/bin"
 if [ ! -d "$BIN_DIR" ]; then
@@ -146,24 +161,15 @@ if [ -d "/etc/modprobe.d" ]; then
   fi
 fi
 
-# 检测内核版本与模块状态
-KERNEL_MAJOR=$(uname -r | cut -d. -f1)
-KERNEL_MINOR=$(uname -r | cut -d. -f2)
-if [ "$KERNEL_MAJOR" -gt 6 ] || { [ "$KERNEL_MAJOR" -eq 6 ] && [ "$KERNEL_MINOR" -ge 19 ]; }; then
-  echo "[*] 检测到主线内核 >= 6.19，尝试按需加载 uniwill-laptop..."
-  modprobe uniwill-laptop 2>/dev/null || true
-else
-  # Linux < 6.19 (如 Ubuntu 24.04 默认 6.8 内核)
-  if ! lsmod 2>/dev/null | grep -qE "tuxedo_keyboard|uniwill_wmi|uniwill_laptop"; then
-    echo "------------------------------------------------------------------"
-    echo "[!] 驱动生态适配建议 (当前内核 $(uname -r) < 6.19):"
-    echo "    当前内核版本尚未内置 uniwill-laptop 驱动。"
-    echo "    如需激活电池养护上限、键盘背光与硬件强冷 (fan_boost)，建议安装 tuxedo-drivers DKMS:"
-    echo "    - Ubuntu/Debian: 添加 tuxedo PPA 并执行 sudo apt install tuxedo-drivers-dkms"
-    echo "    - Arch Linux:    yay -S tuxedo-drivers-dkms"
-    echo "    - Fedora:        从 COPR 安装 tuxedo-drivers"
-    echo "------------------------------------------------------------------"
-  fi
+# 检测是否已装载硬件驱动生态模块 (tuxedo-drivers / uniwill-laptop)
+if ! lsmod 2>/dev/null | grep -qE "tuxedo_keyboard|uniwill_wmi"; then
+  echo "------------------------------------------------------------------"
+  echo "[!] 提示: 当前系统尚未安装同方/Uniwill 原厂 DKMS 模具驱动 (tuxedo-drivers)。"
+  echo "    当前状态下 CPU 功耗限制 (RAPL)、EPP 调频、电源状态探测等核心功能均正常工作。"
+  echo "    若需要进一步激活【电池充至80%养护 (battery 80)】、【键盘背光调节 (keyboard)】与【风扇100%强冷 (fan-boost)】:"
+  echo "    可一键运行专属驱动配置脚本:"
+  echo "        sudo ./scripts/setup-tuxedo-drivers.sh"
+  echo "------------------------------------------------------------------"
 fi
 
 # 4. 机械革命 / 同方模具休眠与输入硬件内核参数自检

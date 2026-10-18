@@ -186,7 +186,7 @@ impl BatteryDriver {
                 if write_end_first {
                     self.ctx
                         .write_text(&threshold_node, &format!("{}\n", threshold_percent))
-                        .map_err(&map_write_err)?;
+                        .map_err(map_write_err)?;
                     let _ = self
                         .ctx
                         .write_text(&start_node, &format!("{}\n", target_start));
@@ -196,12 +196,12 @@ impl BatteryDriver {
                         .write_text(&start_node, &format!("{}\n", target_start));
                     self.ctx
                         .write_text(&threshold_node, &format!("{}\n", threshold_percent))
-                        .map_err(&map_write_err)?;
+                        .map_err(map_write_err)?;
                 }
             } else {
                 self.ctx
                     .write_text(&threshold_node, &format!("{}\n", threshold_percent))
-                    .map_err(&map_write_err)?;
+                    .map_err(map_write_err)?;
             }
         } else if let Some(tuxedo_node) = self.find_tuxedo_charging_profile_node() {
             let mode_str = if threshold_percent <= 80 {
@@ -213,12 +213,12 @@ impl BatteryDriver {
             };
             self.ctx
                 .write_text(&tuxedo_node, &format!("{}\n", mode_str))
-                .map_err(&map_write_err)?;
+                .map_err(map_write_err)?;
         } else {
             let fallback_node = format!("{}/charge_control_end_threshold", bat_path);
             self.ctx
                 .write_text(&fallback_node, &format!("{}\n", threshold_percent))
-                .map_err(&map_write_err)?;
+                .map_err(map_write_err)?;
         }
 
         Ok(())

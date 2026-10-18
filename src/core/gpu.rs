@@ -116,8 +116,8 @@ impl NvidiaSmiDriver {
         {
             Command::new("systemctl")
                 .args(["is-active", "--quiet", "nvidia-powerd"])
-                .status()
-                .map(|s| s.success())
+                .output()
+                .map(|out| out.status.success())
                 .unwrap_or(false)
         }
         #[cfg(not(unix))]

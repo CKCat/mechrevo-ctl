@@ -87,11 +87,9 @@ fn send_ipc_command_with_retry(req: &IpcRequest, max_retries: usize) -> Option<I
         }
 
         let mut buf = Vec::new();
-        if let Ok(_) = stream.read_to_end(&mut buf) {
-            if !buf.is_empty() {
-                if let Ok(resp) = serde_json::from_slice(&buf) {
-                    return Some(resp);
-                }
+        if stream.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+            if let Ok(resp) = serde_json::from_slice(&buf) {
+                return Some(resp);
             }
         }
     }
