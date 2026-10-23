@@ -21,9 +21,50 @@ pub enum IpcRequest {
     FanBoost { enable: bool },
     ReloadProfile,
     Status,
+    GetInfo,
 }
 
 pub const DEFAULT_STATE_FILE_PATH: &str = "/var/lib/mechrevo/state.json";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SystemInfoReport {
+    pub chassis: String,
+    pub active_profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acpi_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_pl1_w: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_pl2_w: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_temp_c: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_epp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_power_w: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_temp_c: Option<i32>,
+    pub gpu_d3cold: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu_dynamic_boost: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery_threshold: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyboard_brightness: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fan_boost: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fan1_rpm: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fan2_rpm: Option<u32>,
+    pub ac_online: bool,
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct DaemonState {
@@ -348,6 +389,93 @@ impl MechrevoDaemon {
         out
     }
 
+    /// Gathers structured telemetry and status for GUI and automated consumers.
+    pub fn get_system_status_info(&self) -> SystemInfoReport {
+        let platform_drv = AcpiPlatformDriver::new(self.ctx.clone());
+        let chassis = platform_drv
+            .get_dmi_product_name()
+            .unwrap_or_else(|| "Unknown Chassis".to_string());
+        let acpi_profile = platform_drv.get_current_profile().ok();
+
+        // 1. CPU
+        let cpu_drv = IntelRaplDriver::new(self.ctx.clone());
+        let hwmon = self.fan_drv.get_hwmon_snapshot();
+        let (cpu_pl1_w, cpu_pl2_w) = match cpu_drv.get_power_limits() {
+            Ok(limits) => (Some(limits.pl1_w), Some(limits.pl2_w)),
+            Err(_) => (None, None),
+        };
+        let cpu_temp_c = hwmon.cpu_temp_c;
+        let cpu_epp = cpu_drv
+            .find_epp_nodes()
+            .first()
+            .and_then(|node| self.ctx.read_text(node).ok());
+
+        // 2. GPU
+        let gpu_drv = NvidiaSmiDriver::default().with_ctx(self.ctx.clone());
+        let (gpu_name, gpu_power_w, gpu_temp_c, gpu_d3cold, gpu_dynamic_boost) =
+            if gpu_drv.is_available() {
+                match gpu_drv.get_gpu_info() {
+                    Ok(info) if info.is_suspended => (
+                        Some(info.name),
+                        None,
+                        None,
+                        true,
+                        info.dynamic_boost_active,
+                    ),
+                    Ok(info) => (
+                        Some(info.name),
+                        Some(info.current_power_limit_w),
+                        Some(info.temperature_c),
+                        false,
+                        info.dynamic_boost_active,
+                    ),
+                    Err(_) => (None, None, None, false, None),
+                }
+            } else {
+                (None, None, None, false, None)
+            };
+
+        // 3. Battery
+        let (battery_percent, battery_status, battery_threshold) =
+            match self.battery_drv.get_battery_status() {
+                Ok(bat) => (
+                    Some(bat.capacity_percent),
+                    Some(bat.status),
+                    Some(bat.charge_threshold),
+                ),
+                Err(_) => (None, None, None),
+            };
+
+        // 4. Keyboard
+        let keyboard_brightness = self.keyboard_drv.get_brightness_percent().ok();
+
+        // 5. Fan
+        let fan_boost = self.fan_drv.get_fan_boost();
+
+        SystemInfoReport {
+            chassis,
+            active_profile: self.last_active_profile.clone(),
+            acpi_profile,
+            cpu_pl1_w,
+            cpu_pl2_w,
+            cpu_temp_c,
+            cpu_epp,
+            gpu_name,
+            gpu_power_w,
+            gpu_temp_c,
+            gpu_d3cold,
+            gpu_dynamic_boost,
+            battery_percent,
+            battery_status,
+            battery_threshold,
+            keyboard_brightness,
+            fan_boost,
+            fan1_rpm: hwmon.fan1_rpm,
+            fan2_rpm: hwmon.fan2_rpm,
+            ac_online: self.is_ac_online(),
+        }
+    }
+
 
     /// Evaluates AC state transition and applies power profile safely.
     pub fn evaluate_ac_state(&mut self) {
@@ -492,6 +620,21 @@ impl MechrevoDaemon {
                     success: true,
                     message: Some(report),
                     error: None,
+                }
+            }
+            Ok(IpcRequest::GetInfo) => {
+                let info = self.get_system_status_info();
+                match serde_json::to_string(&info) {
+                    Ok(json_str) => IpcResponse {
+                        success: true,
+                        message: Some(json_str),
+                        error: None,
+                    },
+                    Err(e) => IpcResponse {
+                        success: false,
+                        message: None,
+                        error: Some(format!("Failed to serialize system info: {}", e)),
+                    },
                 }
             }
 
@@ -881,6 +1024,38 @@ mod tests {
         let daemon2 = MechrevoDaemon::new(ctx.clone(), None);
         let summary2 = daemon2.get_system_status_summary();
         assert!(summary2.contains("nvidia-powerd active") || summary2.contains("Dynamic Boost"));
+    }
+
+    #[test]
+    fn test_daemon_ipc_get_info_request() {
+        let dir = tempdir().unwrap();
+        let ctx = SysfsContext::with_root(dir.path());
+
+        // Setup mock environment
+        let rapl_base = ctx.resolve(crate::core::cpu::RAPL_BASE_PATH);
+        std::fs::create_dir_all(&rapl_base).unwrap();
+        std::fs::write(rapl_base.join("constraint_0_power_limit_uw"), "75000000\n").unwrap();
+        std::fs::write(rapl_base.join("constraint_1_power_limit_uw"), "90000000\n").unwrap();
+
+        let bat_base = ctx.resolve("/sys/class/power_supply/BAT0");
+        std::fs::create_dir_all(&bat_base).unwrap();
+        std::fs::write(bat_base.join("capacity"), "85\n").unwrap();
+        std::fs::write(bat_base.join("status"), "Discharging\n").unwrap();
+        std::fs::write(bat_base.join("charge_control_end_threshold"), "80\n").unwrap();
+
+        let mut daemon = MechrevoDaemon::new(ctx, None);
+        daemon.last_active_profile = "balanced".to_string();
+
+        let res_str = daemon.handle_ipc_request(r#"{"action":"get_info"}"#);
+        let resp: IpcResponse = serde_json::from_str(&res_str).unwrap();
+        assert!(resp.success, "IPC get_info request must succeed");
+        let msg = resp.message.expect("IPC get_info response must contain JSON report");
+        let info: SystemInfoReport = serde_json::from_str(&msg).expect("Message must be valid SystemInfoReport JSON");
+        assert_eq!(info.active_profile, "balanced");
+        assert_eq!(info.battery_percent, Some(85));
+        assert_eq!(info.battery_threshold, Some(80));
+        assert_eq!(info.cpu_pl1_w, Some(75.0));
+        assert_eq!(info.cpu_pl2_w, Some(90.0));
     }
 }
 

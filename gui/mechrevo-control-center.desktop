@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=MECHREVO Control Center
+Name[zh_CN]=机械革命控制中心
+Comment=Hardware power, thermal, battery and performance management for MECHREVO laptops
+Comment[zh_CN]=机械革命笔记本功耗释放、性能模式、风扇强冷与电池养护控制中心
+Exec=mechrevo-gui
+Icon=mechrevo-control-center
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;System;Utility;
+Keywords=mechrevo;gaming;performance;rapl;fan;battery;backlight;turbo;
+StartupNotify=true
+StartupWMClass=mechrevo-gui
+

@@ -39,10 +39,17 @@ echo "[*] 清理系统睡眠恢复钩子..."
 rm -f /usr/lib/systemd/system-sleep/mechrevo-ctl-resume.sh
 rm -f /lib/systemd/system-sleep/mechrevo-ctl-resume.sh
 
-# 3. 移除原生二进制可执行文件
-echo "[*] 移除可执行文件 (mechrevo-ctl & mechrevo-ctld)..."
-rm -f /usr/local/bin/mechrevo-ctl /usr/local/bin/mechrevo-ctld
-rm -f /usr/bin/mechrevo-ctl /usr/bin/mechrevo-ctld
+# 3. 移除原生二进制可执行文件与 GUI 桌面集成
+echo "[*] 移除可执行文件 (mechrevo-ctl, mechrevo-ctld & mechrevo-gui)..."
+rm -f /usr/local/bin/mechrevo-ctl /usr/local/bin/mechrevo-ctld /usr/local/bin/mechrevo-gui
+rm -f /usr/bin/mechrevo-ctl /usr/bin/mechrevo-ctld /usr/bin/mechrevo-gui
+
+echo "[*] 移除桌面快捷方式与图标..."
+rm -f /usr/share/applications/mechrevo-control-center.desktop
+rm -f /usr/share/icons/hicolor/scalable/apps/mechrevo-control-center.svg
+rm -f /usr/share/pixmaps/mechrevo-control-center.svg
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
 
 # 4. 移除 udev 规则并重载规则库
 if [ -f "/etc/udev/rules.d/99-mechrevo-powercap.rules" ]; then

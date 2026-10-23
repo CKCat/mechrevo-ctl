@@ -31,7 +31,7 @@ elif [ -d "$HOME/.cargo/bin" ]; then
 fi
 
 # 若已存在预编译完成的原生 Release 二进制文件，直接进行部署安装
-if [ -f "target/release/mechrevo-ctl" ] && [ -f "target/release/mechrevo-ctld" ]; then
+if [ -f "target/release/mechrevo-ctl" ] && [ -f "target/release/mechrevo-ctld" ] && [ -f "target/release/mechrevo-gui" ]; then
   echo "[+] 检测到已就绪的原生 Release 二进制文件，直接使用当前构建产物。"
 else
   CARGO_BIN="$(command -v cargo || true)"
@@ -59,6 +59,22 @@ fi
 echo "[*] 安装原生二进制文件至 $BIN_DIR..."
 install -m 755 target/release/mechrevo-ctl "$BIN_DIR/mechrevo-ctl"
 install -m 755 target/release/mechrevo-ctld "$BIN_DIR/mechrevo-ctld"
+install -m 755 target/release/mechrevo-gui "$BIN_DIR/mechrevo-gui"
+
+echo "[*] 安装桌面应用程序启动器与图标..."
+if [ -f "gui/mechrevo-control-center.desktop" ]; then
+  mkdir -p /usr/share/applications
+  install -m 644 gui/mechrevo-control-center.desktop /usr/share/applications/mechrevo-control-center.desktop
+fi
+
+if [ -f "gui/mechrevo-control-center.svg" ]; then
+  mkdir -p /usr/share/icons/hicolor/scalable/apps
+  mkdir -p /usr/share/pixmaps
+  install -m 644 gui/mechrevo-control-center.svg /usr/share/icons/hicolor/scalable/apps/mechrevo-control-center.svg
+  install -m 644 gui/mechrevo-control-center.svg /usr/share/pixmaps/mechrevo-control-center.svg
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
 
 echo "[*] 安装 systemd 守护进程服务与睡眠唤醒钩子..."
 
@@ -213,6 +229,8 @@ echo "  - 通过 /run/mechrevo-ctl.sock 本地套接字交互，普通用户【�
 echo "  - 支持合盖休眠唤醒自动恢复上次性能档位与安全自愈"
 echo ""
 echo "常用指令 (普通用户终端直接输入):"
+echo "  mechrevo-gui                       # 启动原生图形化控制中心 (或从系统桌面应用菜单启动)"
+echo "  mechrevo-ctl gui                   # 通过命令行调用启动图形界面"
 echo "  mechrevo-ctl status                # 查看当前功耗、电池与温度 (零唤醒独显)"
 echo "  mechrevo-ctl profile turbo         # 切换至狂暴模式 (CPU 105W, GPU 140W, EC M3T1 温控)"
 echo "  mechrevo-ctl profile office        # 切换至办公省电模式 (CPU 45W, GPU 60W, 独显 D3cold)"

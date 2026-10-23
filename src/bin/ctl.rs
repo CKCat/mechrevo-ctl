@@ -47,6 +47,8 @@ enum Commands {
     },
     /// Reload and re-apply current performance profile
     ReloadProfile,
+    /// Launch the MECHREVO Control Center GUI
+    Gui,
 }
 
 #[cfg(unix)]
@@ -400,6 +402,53 @@ fn cmd_reload_profile(ctx: &SysfsContext) -> Result<()> {
 }
 
 
+fn cmd_gui() -> Result<()> {
+    let mut candidate_paths = vec![
+        "/usr/local/bin/mechrevo-gui".to_string(),
+        "/usr/bin/mechrevo-gui".to_string(),
+        "./target/release/mechrevo-gui".to_string(),
+        "./target/debug/mechrevo-gui".to_string(),
+    ];
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let sibling = parent.join("mechrevo-gui");
+            if sibling.exists() {
+                candidate_paths.insert(0, sibling.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    let gui_cmd = candidate_paths
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .cloned();
+
+    let mut command = if let Some(path) = gui_cmd {
+        std::process::Command::new(path)
+    } else {
+        std::process::Command::new("mechrevo-gui")
+    };
+
+    println!("[*] Launching MECHREVO Control Center GUI...");
+    match command.spawn() {
+        Ok(mut child) => {
+            let status = child.wait().map_err(MechrevoError::Io)?;
+            if !status.success() {
+                if let Some(code) = status.code() {
+                    std::process::exit(code);
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[!] Failed to launch mechrevo-gui: {}", e);
+            eprintln!("[!] Hint: Make sure mechrevo-gui is installed or run 'sudo ./install.sh'.");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let ctx = SysfsContext::new();
@@ -411,6 +460,7 @@ fn main() {
         Commands::Keyboard { brightness } => cmd_keyboard(&ctx, brightness),
         Commands::FanBoost { state } => cmd_fan_boost(&ctx, &state),
         Commands::ReloadProfile => cmd_reload_profile(&ctx),
+        Commands::Gui => cmd_gui(),
     };
 
     if let Err(e) = result {
