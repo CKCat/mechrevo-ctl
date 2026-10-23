@@ -109,6 +109,10 @@ fn parse_status_text(text: &str) -> SystemInfoReport {
             if let Some(num) = trimmed.split("Temperature:").nth(1).and_then(|s| s.split("°C").next()) {
                 gpu_temp_c = num.trim().parse::<i32>().ok();
             }
+        } else if trimmed.contains("Temperature:") {
+            if let Some(num) = trimmed.split("Temperature:").nth(1).and_then(|s| s.split("°C").next()) {
+                gpu_temp_c = num.trim().parse::<i32>().ok();
+            }
         } else if trimmed.contains("Active software profile: '") {
             if let Some(prof) = trimmed.split("Active software profile: '").nth(1).and_then(|s| s.split('\'').next()) {
                 active_profile = prof.to_string();
@@ -402,7 +406,7 @@ impl eframe::App for MechrevoGuiApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("⚡ MECHREVO")
+                        RichText::new("MECHREVO")
                             .color(Color32::from_rgb(0, 242, 254))
                             .strong()
                             .size(17.0),
@@ -429,7 +433,7 @@ impl eframe::App for MechrevoGuiApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button(if self.is_loading { "⏳ 刷新中" } else { "🔄 刷新" })
+                            .button(if self.is_loading { "刷新中..." } else { "刷新" })
                             .clicked()
                         {
                             self.is_loading = true;
@@ -441,13 +445,13 @@ impl eframe::App for MechrevoGuiApp {
                         if let Some(ref info) = self.info {
                             if info.ac_online {
                                 ui.label(
-                                    RichText::new("🔌 AC 已连")
+                                    RichText::new("[AC 适配器已连]")
                                         .color(Color32::from_rgb(52, 211, 153))
                                         .size(12.0),
                                 );
                             } else {
                                 ui.label(
-                                    RichText::new("🔋 电池供电")
+                                    RichText::new("[正在使用电池]")
                                         .color(Color32::from_rgb(251, 191, 36))
                                         .size(12.0),
                                 );
@@ -526,7 +530,7 @@ impl MechrevoGuiApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("⚡ 性能释放模式 (PERFORMANCE PROFILES)")
+                        RichText::new("性能释放模式 (PERFORMANCE PROFILES)")
                             .color(Color32::from_rgb(148, 163, 184))
                             .strong()
                             .size(13.0),
@@ -556,7 +560,7 @@ impl MechrevoGuiApp {
                         .show(&mut columns[0], |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new("🚀 狂暴满血")
+                                    RichText::new("狂暴满血 (Turbo)")
                                         .color(Color32::from_rgb(248, 113, 113))
                                         .strong()
                                         .size(14.0),
@@ -612,7 +616,7 @@ impl MechrevoGuiApp {
                         .show(&mut columns[1], |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new("⚖️ 日常平衡")
+                                    RichText::new("日常平衡 (Balanced)")
                                         .color(Color32::from_rgb(56, 189, 248))
                                         .strong()
                                         .size(14.0),
@@ -668,7 +672,7 @@ impl MechrevoGuiApp {
                         .show(&mut columns[2], |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new("🍃 办公静音")
+                                    RichText::new("办公静音 (Office)")
                                         .color(Color32::from_rgb(52, 211, 153))
                                         .strong()
                                         .size(14.0),
@@ -717,7 +721,7 @@ impl MechrevoGuiApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("❄️ 散热与极限强冷 (COOLING & FAN BOOST)")
+                        RichText::new("散热与极限强冷 (COOLING & FAN BOOST)")
                             .color(Color32::from_rgb(148, 163, 184))
                             .strong()
                             .size(13.0),
@@ -755,9 +759,9 @@ impl MechrevoGuiApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (btn_text, target) = if is_boost {
-                            ("❄️ 关闭强冷 (恢复自动)", false)
+                            ("关闭强冷 (恢复自动)", false)
                         } else {
-                            ("🌪️ 开启 100% 极限强冷", true)
+                            ("开启 100% 极限强冷", true)
                         };
                         if ui.button(RichText::new(btn_text).size(13.0)).clicked() {
                             let _ = self.action_tx.send(IpcAction::SetFanBoost(target));
@@ -788,7 +792,7 @@ impl MechrevoGuiApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("🔋 电池健康与充电养护 (BATTERY CONSERVATION)")
+                        RichText::new("电池健康与充电养护 (BATTERY CONSERVATION)")
                             .color(Color32::from_rgb(148, 163, 184))
                             .strong()
                             .size(13.0),
@@ -856,7 +860,7 @@ impl MechrevoGuiApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("⌨️ 键盘多色背光调节 (KEYBOARD BACKLIGHT)")
+                        RichText::new("键盘多色背光调节 (KEYBOARD BACKLIGHT)")
                             .color(Color32::from_rgb(148, 163, 184))
                             .strong()
                             .size(13.0),
@@ -899,7 +903,7 @@ impl MechrevoGuiApp {
             .inner_margin(egui::Margin::same(14.0))
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new("📊 实时硬件传感器与状态遥测 (LIVE TELEMETRY)")
+                    RichText::new("实时硬件传感器与状态遥测 (LIVE TELEMETRY)")
                         .color(Color32::from_rgb(148, 163, 184))
                         .strong()
                         .size(13.0),
@@ -921,7 +925,7 @@ impl MechrevoGuiApp {
                                 ui.label(RichText::new(format!("PL1: {:.0}W | PL2: {:.0}W", pl1, pl2)).color(Color32::WHITE).strong().size(13.0));
                                 let t_str = info.cpu_temp_c.map(|t| format!("{}°C", t)).unwrap_or_else(|| "--°C".to_string());
                                 let epp = info.cpu_epp.as_deref().unwrap_or("balance");
-                                ui.label(RichText::new(format!("温度: {} | EPP: {}", t_str, epp)).color(Color32::from_rgb(56, 189, 248)).size(11.0));
+                                ui.label(RichText::new(format!("核心温度: {} | EPP: {}", t_str, epp)).color(Color32::from_rgb(56, 189, 248)).size(11.0));
                             } else {
                                 ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
                             }
@@ -940,10 +944,13 @@ impl MechrevoGuiApp {
                                     ui.label(RichText::new("PCIe RTD3 D3cold").color(Color32::from_rgb(52, 211, 153)).strong().size(13.0));
                                     ui.label(RichText::new("深度断电待机 (0W · 零惊醒)").color(Color32::from_rgb(148, 163, 184)).size(11.0));
                                 } else {
-                                    let p_str = info.gpu_power_w.map(|p| format!("{:.0}W", p)).unwrap_or_else(|| "动态".to_string());
+                                    let p_str = match info.gpu_power_w {
+                                        Some(p) if p > 0.0 => format!("活跃 · 功耗上限 {:.0}W", p),
+                                        _ => "活跃 · 基础功耗释放".to_string(),
+                                    };
                                     let t_str = info.gpu_temp_c.map(|t| format!("{}°C", t)).unwrap_or_else(|| "--°C".to_string());
-                                    ui.label(RichText::new(format!("活跃 | 功耗: {}", p_str)).color(Color32::WHITE).strong().size(13.0));
-                                    ui.label(RichText::new(format!("温度: {}", t_str)).color(Color32::from_rgb(56, 189, 248)).size(11.0));
+                                    ui.label(RichText::new(p_str).color(Color32::WHITE).strong().size(13.0));
+                                    ui.label(RichText::new(format!("核心温度: {}", t_str)).color(Color32::from_rgb(56, 189, 248)).size(11.0));
                                 }
                             } else {
                                 ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
@@ -959,7 +966,7 @@ impl MechrevoGuiApp {
                         .show(&mut columns[2], |ui| {
                             ui.label(RichText::new("供电与风扇转速").color(Color32::from_rgb(100, 116, 139)).size(11.0));
                             if let Some(ref info) = self.info {
-                                let p_st = if info.ac_online { "原装适配器已连接 ⚡" } else { "正在使用电池供电 🔋" };
+                                let p_st = if info.ac_online { "原装适配器已连接" } else { "正在使用电池供电" };
                                 ui.label(RichText::new(p_st).color(Color32::WHITE).strong().size(12.0));
                                 let fan_str = match (info.fan1_rpm, info.fan2_rpm) {
                                     (Some(f1), Some(f2)) => format!("F1: {} | F2: {} RPM", f1, f2),
@@ -1020,6 +1027,9 @@ mod tests {
         assert_eq!(info.cpu_temp_c, Some(75));
         assert_eq!(info.cpu_epp.as_deref(), Some("balance_performance"));
         assert_eq!(info.active_profile, "balanced");
+        assert_eq!(info.gpu_power_w, Some(0.0));
+        assert_eq!(info.gpu_temp_c, Some(51));
+        assert_eq!(info.gpu_d3cold, false);
         assert_eq!(info.battery_percent, Some(100));
         assert_eq!(info.battery_status.as_deref(), Some("Full"));
         assert_eq!(info.battery_threshold, Some(80));
