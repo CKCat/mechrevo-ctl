@@ -495,28 +495,119 @@ impl eframe::App for MechrevoGuiApp {
         // Request continuous repaint if auto-refresh is active
         ctx.request_repaint_after(Duration::from_millis(500));
 
-        // 1. Bottom Shortcut Status Bar
+        // 1. Bottom Shortcut & Status Bar
+        let (has_status, is_err) = match self.status_message {
+            Some((_, err, _)) => (true, err),
+            None => (false, false),
+        };
+
+        let bottom_bg = if has_status {
+            if is_err {
+                Color32::from_rgb(46, 20, 24)
+            } else {
+                Color32::from_rgb(14, 34, 44)
+            }
+        } else {
+            Color32::from_rgb(18, 24, 34)
+        };
+
+        let bottom_stroke = if has_status {
+            if is_err {
+                Stroke::new(1.0_f32, Color32::from_rgb(239, 68, 68))
+            } else {
+                Stroke::new(1.0_f32, Color32::from_rgb(6, 182, 212))
+            }
+        } else {
+            Stroke::NONE
+        };
+
         egui::TopBottomPanel::bottom("bottom_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(18, 24, 34))
-                    .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
+                    .fill(bottom_bg)
+                    .stroke(bottom_stroke)
+                    .inner_margin(egui::Margin::symmetric(16.0, 7.0)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("快捷键: [1] 狂暴  [2] 平衡  [3] 办公  [B] 强冷  [R/F5] 刷新  [Esc] 关闭提示")
-                            .color(Color32::from_rgb(148, 163, 184))
-                            .size(11.5),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new("机械革命 极光X (GM6IQ0C) · Linux 原生控制引擎")
-                                .color(Color32::from_rgb(100, 116, 139))
-                                .size(11.0),
-                        );
+                if let Some((ref msg, is_err, _)) = self.status_message {
+                    let (title, detail) = format_status_message(msg);
+                    let (badge_bg, icon, title_color, detail_color) = if is_err {
+                        (
+                            Color32::from_rgb(185, 28, 28),
+                            "⚠ 执行失败",
+                            Color32::from_rgb(254, 202, 202),
+                            Color32::from_rgb(252, 165, 165),
+                        )
+                    } else {
+                        (
+                            Color32::from_rgb(8, 145, 178),
+                            "✔ 生效成功",
+                            Color32::WHITE,
+                            Color32::from_rgb(153, 246, 228),
+                        )
+                    };
+
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close_btn = ui.button(
+                                RichText::new("关闭 (Esc)")
+                                    .color(Color32::from_rgb(203, 213, 225))
+                                    .size(11.0),
+                            );
+                            if close_btn.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if close_btn.clicked() {
+                                self.status_message = None;
+                            }
+
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new(format!(" {} ", icon))
+                                        .color(Color32::WHITE)
+                                        .background_color(badge_bg)
+                                        .strong()
+                                        .size(11.0),
+                                );
+                                ui.add_space(6.0);
+
+                                ui.label(
+                                    RichText::new(&title)
+                                        .color(title_color)
+                                        .strong()
+                                        .size(12.0),
+                                );
+
+                                if let Some(ref det) = detail {
+                                    ui.add_space(4.0);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(format!("• {}", det))
+                                                .color(detail_color)
+                                                .size(11.0),
+                                        )
+                                        .truncate(true),
+                                    );
+                                }
+                            });
+                        });
                     });
-                });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("快捷键: [1] 狂暴  [2] 平衡  [3] 办公  [B] 强冷  [R/F5] 刷新  [Esc] 关闭提示")
+                                .color(Color32::from_rgb(148, 163, 184))
+                                .size(11.5),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new("机械革命 极光X (GM6IQ0C) · Linux 原生控制引擎")
+                                    .color(Color32::from_rgb(100, 116, 139))
+                                    .size(11.0),
+                            );
+                        });
+                    });
+                }
             });
 
         // 2. Top Navigation Bar
@@ -596,42 +687,6 @@ impl eframe::App for MechrevoGuiApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        // Toast banner
-                        if let Some((ref msg, is_err, _)) = self.status_message {
-                            let (bg, border) = if is_err {
-                                (Color32::from_rgb(60, 20, 20), Color32::from_rgb(239, 68, 68))
-                            } else {
-                                (Color32::from_rgb(20, 45, 45), Color32::from_rgb(6, 182, 212))
-                            };
-
-                            let (title, detail) = format_status_message(msg);
-
-                            egui::Frame::none()
-                                .fill(bg)
-                                .stroke(Stroke::new(1.0_f32, border))
-                                .rounding(Rounding::same(6.0_f32))
-                                .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui.button(RichText::new("关闭 ✕").size(11.0)).clicked() {
-                                                self.status_message = None;
-                                            }
-
-                                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                                ui.vertical(|ui| {
-                                                    ui.add(egui::Label::new(RichText::new(title).color(Color32::WHITE).strong().size(12.5)).wrap(true));
-                                                    if let Some(det) = detail {
-                                                        ui.add(egui::Label::new(RichText::new(det).color(Color32::from_rgb(180, 205, 225)).size(11.0)).wrap(true));
-                                                    }
-                                                });
-                                            });
-                                        });
-                                    });
-                                });
-                            ui.add_space(8.0);
-                        }
-
                         // Module 1: Performance Release Profiles
                         self.render_profile_section(ui);
                         ui.add_space(10.0);
