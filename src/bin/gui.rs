@@ -188,18 +188,6 @@ fn fetch_system_info() -> Result<SystemInfoReport, String> {
     Err(resp.error.unwrap_or_else(|| "获取硬件数据失败".to_string()))
 }
 
-struct MechrevoGuiApp {
-    info: Option<SystemInfoReport>,
-    action_tx: Sender<IpcAction>,
-    result_rx: Receiver<IpcResult>,
-    status_message: Option<(String, bool, Instant)>, // (msg, is_error, timestamp)
-    auto_refresh: bool,
-    last_refresh: Instant,
-    custom_battery_th: u32,
-    custom_kbd_br: u32,
-    is_loading: bool,
-}
-
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut font_candidates = vec![
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string(),
@@ -239,6 +227,62 @@ fn setup_custom_fonts(ctx: &egui::Context) {
             break;
         }
     }
+}
+
+/// Renders a clickable preset pill button with active indicator
+fn render_pill_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    is_active: bool,
+    accent_color: Color32,
+) -> bool {
+    let (bg, stroke, text_color) = if is_active {
+        (
+            Color32::from_rgb(26, 44, 66),
+            Stroke::new(1.5_f32, accent_color),
+            Color32::WHITE,
+        )
+    } else {
+        (
+            Color32::from_rgb(24, 32, 48),
+            Stroke::new(1.0_f32, Color32::from_rgb(46, 60, 84)),
+            Color32::from_rgb(180, 195, 215),
+        )
+    };
+
+    let display_text = if is_active {
+        format!("✔ {}", label)
+    } else {
+        label.to_string()
+    };
+
+    let button = egui::Button::new(
+        RichText::new(display_text)
+            .color(text_color)
+            .strong()
+            .size(11.5),
+    )
+    .fill(bg)
+    .stroke(stroke)
+    .rounding(Rounding::same(6.0_f32));
+
+    let response = ui.add(button);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.clicked()
+}
+
+struct MechrevoGuiApp {
+    info: Option<SystemInfoReport>,
+    action_tx: Sender<IpcAction>,
+    result_rx: Receiver<IpcResult>,
+    status_message: Option<(String, bool, Instant)>, // (msg, is_error, timestamp)
+    auto_refresh: bool,
+    last_refresh: Instant,
+    custom_battery_th: u32,
+    custom_kbd_br: u32,
+    is_loading: bool,
 }
 
 impl MechrevoGuiApp {
@@ -380,6 +424,30 @@ impl eframe::App for MechrevoGuiApp {
             }
         }
 
+        // Global ergonomic keyboard shortcuts
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
+                let _ = self.action_tx.send(IpcAction::SetProfile("turbo".to_string()));
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
+                let _ = self.action_tx.send(IpcAction::SetProfile("balanced".to_string()));
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Num3)) {
+                let _ = self.action_tx.send(IpcAction::SetProfile("office".to_string()));
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::B)) {
+                let current_boost = self.info.as_ref().and_then(|i| i.fan_boost).unwrap_or(false);
+                let _ = self.action_tx.send(IpcAction::SetFanBoost(!current_boost));
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F5) || (i.modifiers.ctrl && i.key_pressed(egui::Key::R))) {
+                self.is_loading = true;
+                let _ = self.action_tx.send(IpcAction::Refresh);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.status_message = None;
+            }
+        }
+
         // Auto-refresh hardware sensors every 2 seconds
         if self.auto_refresh && self.last_refresh.elapsed() >= Duration::from_secs(2) {
             let _ = self.action_tx.send(IpcAction::Refresh);
@@ -431,11 +499,19 @@ impl eframe::App for MechrevoGuiApp {
                         );
                     }
 
+                    // Shortcut hints in header
+                    ui.label(
+                        RichText::new("快捷键: [1-3] 模式 | [B] 强冷 | [R] 刷新")
+                            .color(Color32::from_rgb(100, 116, 139))
+                            .size(11.0),
+                    );
+
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(if self.is_loading { "刷新中..." } else { "刷新" })
-                            .clicked()
-                        {
+                        let btn = ui.button(if self.is_loading { "刷新中..." } else { "刷新" });
+                        if btn.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if btn.clicked() {
                             self.is_loading = true;
                             let _ = self.action_tx.send(IpcAction::Refresh);
                         }
@@ -445,7 +521,7 @@ impl eframe::App for MechrevoGuiApp {
                         if let Some(ref info) = self.info {
                             if info.ac_online {
                                 ui.label(
-                                    RichText::new("[AC 适配器已连]")
+                                    RichText::new("[AC 适配器供电]")
                                         .color(Color32::from_rgb(52, 211, 153))
                                         .size(12.0),
                                 );
@@ -479,14 +555,22 @@ impl eframe::App for MechrevoGuiApp {
                             } else {
                                 (Color32::from_rgb(20, 45, 45), Color32::from_rgb(6, 182, 212))
                             };
-                            egui::Frame::none()
+                            let banner = egui::Frame::none()
                                 .fill(bg)
                                 .stroke(Stroke::new(1.0_f32, border))
                                 .rounding(Rounding::same(6.0_f32))
                                 .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(msg).color(Color32::WHITE).size(13.0));
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(msg).color(Color32::WHITE).size(13.0));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            ui.label(RichText::new("点击关闭 ✕").color(Color32::from_rgb(180, 195, 215)).size(11.0));
+                                        });
+                                    });
                                 });
+                            if banner.response.interact(egui::Sense::click()).clicked() {
+                                self.status_message = None;
+                            }
                             ui.add_space(8.0);
                         }
 
@@ -515,6 +599,100 @@ impl eframe::App for MechrevoGuiApp {
 }
 
 impl MechrevoGuiApp {
+    fn render_profile_card(
+        ui: &mut egui::Ui,
+        title: &str,
+        shortcut: &str,
+        specs: &[&str],
+        is_active: bool,
+        accent_color: Color32,
+        active_bg: Color32,
+    ) -> bool {
+        let mut clicked = false;
+        let stroke = if is_active {
+            Stroke::new(2.0_f32, accent_color)
+        } else {
+            Stroke::new(1.0_f32, Color32::from_rgb(42, 55, 82))
+        };
+        let bg = if is_active {
+            active_bg
+        } else {
+            Color32::from_rgb(26, 35, 54)
+        };
+
+        let frame = egui::Frame::none()
+            .fill(bg)
+            .stroke(stroke)
+            .rounding(Rounding::same(8.0_f32))
+            .inner_margin(egui::Margin::same(12.0));
+
+        let card = frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(title)
+                        .color(if is_active { accent_color } else { Color32::WHITE })
+                        .strong()
+                        .size(14.0),
+                );
+                ui.label(
+                    RichText::new(shortcut)
+                        .color(Color32::from_rgb(100, 116, 139))
+                        .size(11.0),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if is_active {
+                        ui.label(
+                            RichText::new("● 当前生效")
+                                .color(Color32::WHITE)
+                                .background_color(accent_color)
+                                .strong()
+                                .size(10.0),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("点击切换")
+                                .color(Color32::from_rgb(148, 163, 184))
+                                .size(11.0),
+                        );
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            for spec in specs {
+                ui.label(
+                    RichText::new(format!("• {}", spec))
+                        .color(Color32::from_rgb(160, 175, 195))
+                        .size(11.0),
+                );
+            }
+            ui.add_space(8.0);
+
+            let btn_label = if is_active { "当前已启用" } else { "立即切换" };
+            let btn = egui::Button::new(
+                RichText::new(btn_label)
+                    .color(if is_active { Color32::WHITE } else { Color32::from_rgb(203, 213, 225) })
+                    .size(11.5),
+            )
+            .fill(if is_active { accent_color } else { Color32::from_rgb(33, 44, 66) })
+            .rounding(Rounding::same(4.0_f32));
+
+            if ui.add_sized([ui.available_width(), 26.0], btn).clicked() && !is_active {
+                clicked = true;
+            }
+        });
+
+        // Make the entire card area clickable
+        let card_interact = ui.interact(card.response.rect, card.response.id.with("click"), egui::Sense::click());
+        if card_interact.hovered() && !is_active {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if card_interact.clicked() && !is_active {
+            clicked = true;
+        }
+
+        clicked
+    }
+
     fn render_profile_section(&mut self, ui: &mut egui::Ui) {
         let current_profile = self
             .info
@@ -535,177 +713,70 @@ impl MechrevoGuiApp {
                             .strong()
                             .size(13.0),
                     );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("提示: 点击任意卡片或按键 [1-3] 即可极速切换")
+                                .color(Color32::from_rgb(100, 116, 139))
+                                .size(11.0),
+                        );
+                    });
                 });
                 ui.add_space(8.0);
 
                 ui.columns(3, |columns| {
                     // 1. Turbo
-                    let is_active = current_profile == "turbo";
-                    let stroke = if is_active {
-                        Stroke::new(2.0_f32, Color32::from_rgb(239, 68, 68))
-                    } else {
-                        Stroke::new(1.0_f32, Color32::from_rgb(42, 55, 82))
-                    };
-                    let bg = if is_active {
-                        Color32::from_rgb(45, 22, 25)
-                    } else {
-                        Color32::from_rgb(26, 35, 54)
-                    };
-
-                    egui::Frame::none()
-                        .fill(bg)
-                        .stroke(stroke)
-                        .rounding(Rounding::same(8.0_f32))
-                        .inner_margin(egui::Margin::same(10.0))
-                        .show(&mut columns[0], |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("狂暴满血 (Turbo)")
-                                        .color(Color32::from_rgb(248, 113, 113))
-                                        .strong()
-                                        .size(14.0),
-                                );
-                                if is_active {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(
-                                                RichText::new("生效中")
-                                                    .color(Color32::WHITE)
-                                                    .background_color(Color32::from_rgb(220, 38, 38))
-                                                    .size(10.0),
-                                            );
-                                        },
-                                    );
-                                }
-                            });
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new("• CPU PL1 105W / PL2 135W\n• GPU 140W (Dynamic Boost)\n• EPP: Performance 电竞")
-                                    .color(Color32::from_rgb(148, 163, 184))
-                                    .size(11.0),
-                            );
-                            ui.add_space(6.0);
-                            if ui
-                                .button(RichText::new(if is_active { "当前模式" } else { "切换狂暴" }).size(12.0))
-                                .clicked()
-                                && !is_active
-                            {
-                                let _ = self.action_tx.send(IpcAction::SetProfile("turbo".to_string()));
-                            }
-                        });
+                    if Self::render_profile_card(
+                        &mut columns[0],
+                        "狂暴满血 (Turbo)",
+                        "[1]",
+                        &[
+                            "CPU PL1 105W / PL2 135W",
+                            "GPU 140W 满血释放",
+                            "EPP: Performance 电竞策略",
+                            "EC M3T1 温控曲线接管",
+                        ],
+                        current_profile == "turbo",
+                        Color32::from_rgb(239, 68, 68),
+                        Color32::from_rgb(45, 22, 25),
+                    ) {
+                        let _ = self.action_tx.send(IpcAction::SetProfile("turbo".to_string()));
+                    }
 
                     // 2. Balanced
-                    let is_active = current_profile == "balanced";
-                    let stroke = if is_active {
-                        Stroke::new(2.0_f32, Color32::from_rgb(6, 182, 212))
-                    } else {
-                        Stroke::new(1.0_f32, Color32::from_rgb(42, 55, 82))
-                    };
-                    let bg = if is_active {
-                        Color32::from_rgb(18, 38, 48)
-                    } else {
-                        Color32::from_rgb(26, 35, 54)
-                    };
-
-                    egui::Frame::none()
-                        .fill(bg)
-                        .stroke(stroke)
-                        .rounding(Rounding::same(8.0_f32))
-                        .inner_margin(egui::Margin::same(10.0))
-                        .show(&mut columns[1], |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("日常平衡 (Balanced)")
-                                        .color(Color32::from_rgb(56, 189, 248))
-                                        .strong()
-                                        .size(14.0),
-                                );
-                                if is_active {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(
-                                                RichText::new("生效中")
-                                                    .color(Color32::WHITE)
-                                                    .background_color(Color32::from_rgb(14, 116, 144))
-                                                    .size(10.0),
-                                            );
-                                        },
-                                    );
-                                }
-                            });
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new("• CPU PL1 75W / PL2 90W\n• GPU 115W 基准释放\n• EPP: Balance 均衡发热")
-                                    .color(Color32::from_rgb(148, 163, 184))
-                                    .size(11.0),
-                            );
-                            ui.add_space(6.0);
-                            if ui
-                                .button(RichText::new(if is_active { "当前模式" } else { "切换平衡" }).size(12.0))
-                                .clicked()
-                                && !is_active
-                            {
-                                let _ = self.action_tx.send(IpcAction::SetProfile("balanced".to_string()));
-                            }
-                        });
+                    if Self::render_profile_card(
+                        &mut columns[1],
+                        "日常平衡 (Balanced)",
+                        "[2]",
+                        &[
+                            "CPU PL1 75W / PL2 90W",
+                            "GPU 115W 基准释放",
+                            "EPP: Balance 均衡发热",
+                            "独显空载自然沉入 D3cold",
+                        ],
+                        current_profile == "balanced",
+                        Color32::from_rgb(6, 182, 212),
+                        Color32::from_rgb(18, 38, 48),
+                    ) {
+                        let _ = self.action_tx.send(IpcAction::SetProfile("balanced".to_string()));
+                    }
 
                     // 3. Office
-                    let is_active = current_profile == "office";
-                    let stroke = if is_active {
-                        Stroke::new(2.0_f32, Color32::from_rgb(16, 185, 129))
-                    } else {
-                        Stroke::new(1.0_f32, Color32::from_rgb(42, 55, 82))
-                    };
-                    let bg = if is_active {
-                        Color32::from_rgb(16, 38, 30)
-                    } else {
-                        Color32::from_rgb(26, 35, 54)
-                    };
-
-                    egui::Frame::none()
-                        .fill(bg)
-                        .stroke(stroke)
-                        .rounding(Rounding::same(8.0_f32))
-                        .inner_margin(egui::Margin::same(10.0))
-                        .show(&mut columns[2], |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new("办公静音 (Office)")
-                                        .color(Color32::from_rgb(52, 211, 153))
-                                        .strong()
-                                        .size(14.0),
-                                );
-                                if is_active {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(
-                                                RichText::new("生效中")
-                                                    .color(Color32::WHITE)
-                                                    .background_color(Color32::from_rgb(4, 120, 87))
-                                                    .size(10.0),
-                                            );
-                                        },
-                                    );
-                                }
-                            });
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new("• CPU PL1 45W / PL2 60W\n• 独显 D3cold 深度断电 0W\n• EPP: Power 极致省电")
-                                    .color(Color32::from_rgb(148, 163, 184))
-                                    .size(11.0),
-                            );
-                            ui.add_space(6.0);
-                            if ui
-                                .button(RichText::new(if is_active { "当前模式" } else { "切换办公" }).size(12.0))
-                                .clicked()
-                                && !is_active
-                            {
-                                let _ = self.action_tx.send(IpcAction::SetProfile("office".to_string()));
-                            }
-                        });
+                    if Self::render_profile_card(
+                        &mut columns[2],
+                        "办公静音 (Office)",
+                        "[3]",
+                        &[
+                            "CPU PL1 45W / PL2 60W",
+                            "独显 PCIe RTD3 深度断电 0W",
+                            "EPP: Power 极致省电",
+                            "超长电池待机续航",
+                        ],
+                        current_profile == "office",
+                        Color32::from_rgb(16, 185, 129),
+                        Color32::from_rgb(16, 38, 30),
+                    ) {
+                        let _ = self.action_tx.send(IpcAction::SetProfile("office".to_string()));
+                    }
                 });
             });
     }
@@ -728,11 +799,11 @@ impl MechrevoGuiApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let status_text = if is_boost {
-                            RichText::new("100% 满血强冷 (Boost: ON)")
+                            RichText::new("[ 100% 满血强冷运行中: ON ]")
                                 .color(Color32::from_rgb(248, 113, 113))
                                 .strong()
                         } else {
-                            RichText::new("自动温控曲线 (Boost: OFF)")
+                            RichText::new("[ EC 智能温控曲线接管: OFF ]")
                                 .color(Color32::from_rgb(148, 163, 184))
                         };
                         ui.label(status_text);
@@ -742,12 +813,19 @@ impl MechrevoGuiApp {
 
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("双风扇 100% 极限飓风强冷")
-                                .color(Color32::WHITE)
-                                .strong()
-                                .size(13.0),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("双风扇 100% 极限飓风强冷")
+                                    .color(Color32::WHITE)
+                                    .strong()
+                                    .size(13.0),
+                            );
+                            ui.label(
+                                RichText::new("快捷键: [B]")
+                                    .color(Color32::from_rgb(100, 116, 139))
+                                    .size(11.0),
+                            );
+                        });
                         ui.label(
                             RichText::new(
                                 "直接接管 Uniwill EC RAM 0x0751 寄存器强冷位，无视温控曲线拉满 100% 风扇转速；适合 3A 电竞与拷机。",
@@ -758,12 +836,26 @@ impl MechrevoGuiApp {
                     });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (btn_text, target) = if is_boost {
-                            ("关闭强冷 (恢复自动)", false)
+                        let (btn_label, btn_color, target) = if is_boost {
+                            ("关闭强冷 (恢复自动温控)", Color32::from_rgb(14, 116, 144), false)
                         } else {
-                            ("开启 100% 极限强冷", true)
+                            ("开启 100% 极限强冷", Color32::from_rgb(220, 38, 38), true)
                         };
-                        if ui.button(RichText::new(btn_text).size(13.0)).clicked() {
+
+                        let btn = egui::Button::new(
+                            RichText::new(btn_label)
+                                .color(Color32::WHITE)
+                                .strong()
+                                .size(12.5),
+                        )
+                        .fill(btn_color)
+                        .rounding(Rounding::same(6.0_f32));
+
+                        let resp = ui.add_sized([180.0, 32.0], btn);
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
                             let _ = self.action_tx.send(IpcAction::SetFanBoost(target));
                         }
                     });
@@ -799,9 +891,9 @@ impl MechrevoGuiApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("当前电量: {}% ({}) | 阈值: {}%", percent, status, current_th))
+                            RichText::new(format!("当前电量: {}% ({}) | 当前养护上限: {}%", percent, status, current_th))
                                 .color(Color32::from_rgb(148, 163, 184))
-                                .size(11.0),
+                                .size(11.5),
                         );
                     });
                 });
@@ -814,29 +906,48 @@ impl MechrevoGuiApp {
                         .show_percentage()
                         .animate(false),
                 );
-                ui.add_space(8.0);
+                ui.add_space(10.0);
 
-                // Preset Buttons & Custom Slider
+                // Preset Pills & Custom Slider
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("快捷养护预设:").size(12.0).color(Color32::from_rgb(148, 163, 184)));
+                    ui.label(RichText::new("快速预设:").size(12.0).color(Color32::from_rgb(148, 163, 184)));
 
-                    if ui.button(RichText::new("80% 长寿养护 (常年插电)").size(11.0)).clicked() {
+                    if render_pill_button(
+                        ui,
+                        "80% 长寿养护 (常年插电)",
+                        current_th == 80,
+                        Color32::from_rgb(6, 182, 212),
+                    ) {
                         self.custom_battery_th = 80;
                         let _ = self.action_tx.send(IpcAction::SetBattery(80));
                     }
 
-                    if ui.button(RichText::new("100% 满电出行 (备战外出)").size(11.0)).clicked() {
+                    if render_pill_button(
+                        ui,
+                        "100% 满电出行 (备战外出)",
+                        current_th == 100,
+                        Color32::from_rgb(16, 185, 129),
+                    ) {
                         self.custom_battery_th = 100;
                         let _ = self.action_tx.send(IpcAction::SetBattery(100));
                     }
 
-                    if ui.button(RichText::new("60% 深度养护").size(11.0)).clicked() {
+                    if render_pill_button(
+                        ui,
+                        "60% 深度养护",
+                        current_th == 60,
+                        Color32::from_rgb(148, 163, 184),
+                    ) {
                         self.custom_battery_th = 60;
                         let _ = self.action_tx.send(IpcAction::SetBattery(60));
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(RichText::new("应用阈值").size(11.0)).clicked() {
+                        let btn = ui.button(RichText::new("应用阈值").size(11.5));
+                        if btn.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if btn.clicked() {
                             let _ = self.action_tx.send(IpcAction::SetBattery(self.custom_battery_th));
                         }
                         ui.add(egui::Slider::new(&mut self.custom_battery_th, 50..=100).suffix("%"));
@@ -867,27 +978,42 @@ impl MechrevoGuiApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("当前亮度: {}%", current_br))
+                            RichText::new(format!("当前背光亮度: {}%", current_br))
                                 .color(Color32::from_rgb(148, 163, 184))
-                                .size(11.0),
+                                .size(11.5),
                         );
                     });
                 });
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    for (val, label) in [(0, "关闭 (0%)"), (25, "弱 (25%)"), (50, "中 (50%)"), (75, "亮 (75%)"), (100, "极亮 (100%)")] {
-                        if ui.button(RichText::new(label).size(11.0)).clicked() {
+                    let levels: [(u32, &str); 5] = [
+                        (0, "关闭 (0%)"),
+                        (25, "弱 (25%)"),
+                        (50, "中 (50%)"),
+                        (75, "亮 (75%)"),
+                        (100, "极亮 (100%)"),
+                    ];
+
+                    for (val, label) in levels {
+                        let is_active = match val {
+                            0 => current_br == 0,
+                            25 => current_br > 0 && current_br <= 35,
+                            50 => current_br > 35 && current_br <= 65,
+                            75 => current_br > 65 && current_br <= 85,
+                            100 => current_br > 85,
+                            _ => false,
+                        };
+
+                        if render_pill_button(ui, label, is_active, Color32::from_rgb(0, 242, 254)) {
                             self.custom_kbd_br = val;
                             let _ = self.action_tx.send(IpcAction::SetKeyboard(val));
                         }
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(egui::Slider::new(&mut self.custom_kbd_br, 0..=100).suffix("%"))
-                            .changed()
-                        {
+                        let slider = ui.add(egui::Slider::new(&mut self.custom_kbd_br, 0..=100).suffix("%"));
+                        if slider.drag_stopped() || (slider.changed() && !slider.has_focus()) {
                             let _ = self.action_tx.send(IpcAction::SetKeyboard(self.custom_kbd_br));
                         }
                     });
@@ -919,13 +1045,23 @@ impl MechrevoGuiApp {
                         .inner_margin(egui::Margin::same(10.0))
                         .show(&mut columns[0], |ui| {
                             ui.label(RichText::new("中央处理器 (CPU)").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            ui.add_space(2.0);
                             if let Some(ref info) = self.info {
                                 let pl1 = info.cpu_pl1_w.unwrap_or(0.0);
                                 let pl2 = info.cpu_pl2_w.unwrap_or(0.0);
                                 ui.label(RichText::new(format!("PL1: {:.0}W | PL2: {:.0}W", pl1, pl2)).color(Color32::WHITE).strong().size(13.0));
-                                let t_str = info.cpu_temp_c.map(|t| format!("{}°C", t)).unwrap_or_else(|| "--°C".to_string());
+                                
+                                let (temp_str, temp_color) = match info.cpu_temp_c {
+                                    Some(t) if t >= 80 => (format!("{}°C (高温)", t), Color32::from_rgb(248, 113, 113)),
+                                    Some(t) if t >= 65 => (format!("{}°C (温热)", t), Color32::from_rgb(251, 191, 36)),
+                                    Some(t) => (format!("{}°C (正常)", t), Color32::from_rgb(56, 189, 248)),
+                                    None => ("--°C".to_string(), Color32::from_rgb(148, 163, 184)),
+                                };
                                 let epp = info.cpu_epp.as_deref().unwrap_or("balance");
-                                ui.label(RichText::new(format!("核心温度: {} | EPP: {}", t_str, epp)).color(Color32::from_rgb(56, 189, 248)).size(11.0));
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(format!("温度: {}", temp_str)).color(temp_color).size(11.0));
+                                    ui.label(RichText::new(format!("EPP: {}", epp)).color(Color32::from_rgb(148, 163, 184)).size(11.0));
+                                });
                             } else {
                                 ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
                             }
@@ -939,18 +1075,25 @@ impl MechrevoGuiApp {
                         .inner_margin(egui::Margin::same(10.0))
                         .show(&mut columns[1], |ui| {
                             ui.label(RichText::new("独立显卡 (RTX 4060)").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            ui.add_space(2.0);
                             if let Some(ref info) = self.info {
                                 if info.gpu_d3cold {
-                                    ui.label(RichText::new("PCIe RTD3 D3cold").color(Color32::from_rgb(52, 211, 153)).strong().size(13.0));
-                                    ui.label(RichText::new("深度断电待机 (0W · 零惊醒)").color(Color32::from_rgb(148, 163, 184)).size(11.0));
+                                    ui.label(RichText::new("● PCIe RTD3 深度休眠").color(Color32::from_rgb(52, 211, 153)).strong().size(13.0));
+                                    ui.label(RichText::new("0W 功耗 · 零发热零耗电待机").color(Color32::from_rgb(148, 163, 184)).size(11.0));
                                 } else {
                                     let p_str = match info.gpu_power_w {
                                         Some(p) if p > 0.0 => format!("活跃 · 功耗上限 {:.0}W", p),
                                         _ => "活跃 · 基础功耗释放".to_string(),
                                     };
-                                    let t_str = info.gpu_temp_c.map(|t| format!("{}°C", t)).unwrap_or_else(|| "--°C".to_string());
                                     ui.label(RichText::new(p_str).color(Color32::WHITE).strong().size(13.0));
-                                    ui.label(RichText::new(format!("核心温度: {}", t_str)).color(Color32::from_rgb(56, 189, 248)).size(11.0));
+
+                                    let (temp_str, temp_color) = match info.gpu_temp_c {
+                                        Some(t) if t >= 80 => (format!("{}°C (高温)", t), Color32::from_rgb(248, 113, 113)),
+                                        Some(t) if t >= 65 => (format!("{}°C (温热)", t), Color32::from_rgb(251, 191, 36)),
+                                        Some(t) => (format!("{}°C (清凉)", t), Color32::from_rgb(56, 189, 248)),
+                                        None => ("--°C".to_string(), Color32::from_rgb(148, 163, 184)),
+                                    };
+                                    ui.label(RichText::new(format!("核心温度: {}", temp_str)).color(temp_color).size(11.0));
                                 }
                             } else {
                                 ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
@@ -964,14 +1107,23 @@ impl MechrevoGuiApp {
                         .rounding(Rounding::same(6.0_f32))
                         .inner_margin(egui::Margin::same(10.0))
                         .show(&mut columns[2], |ui| {
-                            ui.label(RichText::new("供电与风扇转速").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            ui.label(RichText::new("供电输入与双风扇").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            ui.add_space(2.0);
                             if let Some(ref info) = self.info {
-                                let p_st = if info.ac_online { "原装适配器已连接" } else { "正在使用电池供电" };
-                                ui.label(RichText::new(p_st).color(Color32::WHITE).strong().size(12.0));
+                                if info.ac_online {
+                                    ui.label(RichText::new("● 原装适配器已连接").color(Color32::from_rgb(52, 211, 153)).strong().size(12.5));
+                                } else {
+                                    ui.label(RichText::new("● 正在使用电池供电").color(Color32::from_rgb(251, 191, 36)).strong().size(12.5));
+                                }
+
                                 let fan_str = match (info.fan1_rpm, info.fan2_rpm) {
                                     (Some(f1), Some(f2)) => format!("F1: {} | F2: {} RPM", f1, f2),
                                     (Some(f1), None) => format!("F1: {} RPM", f1),
-                                    _ => "EC 固件自动调速".to_string(),
+                                    _ => if info.fan_boost == Some(true) {
+                                        "双风扇 100% 满速强冷".to_string()
+                                    } else {
+                                        "EC 固件智能调速".to_string()
+                                    },
                                 };
                                 ui.label(RichText::new(fan_str).color(Color32::from_rgb(56, 189, 248)).size(11.0));
                             } else {
@@ -986,8 +1138,8 @@ impl MechrevoGuiApp {
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size(Vec2::new(820.0, 640.0))
-            .with_min_inner_size(Vec2::new(760.0, 560.0))
+            .with_inner_size(Vec2::new(840.0, 660.0))
+            .with_min_inner_size(Vec2::new(780.0, 580.0))
             .with_title("机械革命控制中心 - MECHREVO Control Center"),
         ..Default::default()
     };
