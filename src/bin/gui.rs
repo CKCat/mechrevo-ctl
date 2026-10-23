@@ -196,8 +196,52 @@ struct MechrevoGuiApp {
     is_loading: bool,
 }
 
+fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut font_candidates = vec![
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string(),
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf".to_string(),
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc".to_string(),
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc".to_string(),
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc".to_string(),
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc".to_string(),
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc".to_string(),
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".to_string(),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc".to_string(),
+        "/usr/share/fonts/truetype/arphic/uming.ttc".to_string(),
+        "/usr/share/fonts/truetype/arphic/ukai.ttc".to_string(),
+    ];
+
+    if let Ok(home) = std::env::var("HOME") {
+        font_candidates.push(format!("{}/.local/share/fonts/NotoSansCJK-Regular.ttc", home));
+        font_candidates.push(format!("{}/.local/share/fonts/DroidSansFallbackFull.ttf", home));
+    }
+
+    for path in &font_candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "cjk_fallback".to_owned(),
+                egui::FontData::from_owned(bytes),
+            );
+
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                vec.insert(0, "cjk_fallback".to_owned());
+            }
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                vec.push("cjk_fallback".to_owned());
+            }
+
+            ctx.set_fonts(fonts);
+            break;
+        }
+    }
+}
+
 impl MechrevoGuiApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Setup CJK fallback font for Chinese character rendering
+        setup_custom_fonts(&cc.egui_ctx);
+
         // Customize egui theme
         let mut visuals = egui::Visuals::dark();
         visuals.override_text_color = Some(Color32::from_rgb(226, 232, 240));
@@ -981,5 +1025,39 @@ mod tests {
         assert_eq!(info.battery_threshold, Some(80));
         assert_eq!(info.keyboard_brightness, Some(50));
         assert_eq!(info.fan_boost, Some(false));
+    }
+
+    #[test]
+    fn test_font_loading() {
+        for path in &[
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ] {
+            if std::path::Path::new(path).exists() {
+                let bytes = std::fs::read(path).unwrap();
+                let mut fonts = egui::FontDefinitions::default();
+                fonts.font_data.insert(
+                    "cjk_fallback".to_owned(),
+                    egui::FontData::from_owned(bytes),
+                );
+                if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                    vec.push("cjk_fallback".to_owned());
+                }
+                let ctx = egui::Context::default();
+                ctx.set_fonts(fonts);
+
+                let _ = ctx.run(Default::default(), |ctx| {
+                    let galley = ctx.fonts(|f| {
+                        f.layout_no_wrap(
+                            "机械革命 控制中心 狂暴模式 75W".to_owned(),
+                            egui::FontId::proportional(14.0),
+                            egui::Color32::WHITE,
+                        )
+                    });
+                    assert!(!galley.rows.is_empty());
+                    assert!(galley.size().x > 10.0);
+                });
+            }
+        }
     }
 }
