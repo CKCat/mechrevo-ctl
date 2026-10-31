@@ -654,7 +654,7 @@ impl MechrevoGuiApp {
             ctx: cc.egui_ctx.clone(),
         };
 
-        let tray_handle = match tray.spawn() {
+        let tray_handle: Option<TrayHandle<MechrevoTray>> = match tray.spawn() {
             Ok(handle) => Some(handle),
             Err(e) => {
                 eprintln!("[!] 启动系统托盘服务失败 (非致命警告): {}", e);
