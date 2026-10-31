@@ -219,10 +219,16 @@ impl MechrevoDaemon {
             return false;
         }
 
-        // Fallback 1: Legacy hardcoded node
-        if self.ctx.exists(AC_ONLINE_NODE) {
-            if let Ok(val) = self.ctx.read_text(AC_ONLINE_NODE) {
-                return val.trim() == "1";
+        // Fallback 1: Legacy and well-known AC adapter nodes (AC, AC0, ADP1)
+        for node in &[
+            AC_ONLINE_NODE,
+            "/sys/class/power_supply/AC0/online",
+            "/sys/class/power_supply/ADP1/online",
+        ] {
+            if self.ctx.exists(node) {
+                if let Ok(val) = self.ctx.read_text(node) {
+                    return val.trim() == "1";
+                }
             }
         }
 

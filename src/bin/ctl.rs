@@ -6,7 +6,7 @@ use mechrevo::core::cpu::IntelRaplDriver;
 use mechrevo::core::gpu::NvidiaSmiDriver;
 use mechrevo::core::keyboard::KeyboardDriver;
 use mechrevo::core::platform::{AcpiPlatformDriver, FanDriver, ProfileManager};
-use mechrevo::daemon::{IpcRequest, IpcResponse};
+use mechrevo::daemon::{IpcRequest, IpcResponse, DEFAULT_SOCKET_PATH};
 use mechrevo::error::{MechrevoError, Result};
 use mechrevo::hal::SysfsContext;
 
@@ -62,7 +62,7 @@ fn send_ipc_command_with_retry(req: &IpcRequest, max_retries: usize) -> Option<I
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
-    let socket_path = "/run/mechrevo-ctl.sock";
+    let socket_path = DEFAULT_SOCKET_PATH;
     for attempt in 0..max_retries {
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(150));
@@ -87,6 +87,7 @@ fn send_ipc_command_with_retry(req: &IpcRequest, max_retries: usize) -> Option<I
         if stream.write_all(&data).is_err() {
             continue;
         }
+        let _ = stream.shutdown(std::net::Shutdown::Write);
 
         let mut buf = Vec::new();
         if stream.read_to_end(&mut buf).is_ok() && !buf.is_empty() {

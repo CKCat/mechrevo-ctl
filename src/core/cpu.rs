@@ -72,7 +72,8 @@ impl IntelRaplDriver {
                     let file_name = entry.file_name();
                     let name_str = file_name.to_string_lossy();
                     if name_str.starts_with("constraint_") && name_str.ends_with("_name") {
-                        if let Ok(content) = fs::read_to_string(entry.path()) {
+                        let name_node = format!("{}/{}", base_str, name_str);
+                        if let Ok(content) = self.ctx.read_text(&name_node) {
                             let label = content.trim().to_lowercase();
                             let parts: Vec<&str> = name_str.split('_').collect();
                             if parts.len() >= 3 {

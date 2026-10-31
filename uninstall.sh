@@ -44,8 +44,13 @@ echo "[*] 移除可执行文件 (mechrevo-ctl, mechrevo-ctld & mechrevo-gui)..."
 rm -f /usr/local/bin/mechrevo-ctl /usr/local/bin/mechrevo-ctld /usr/local/bin/mechrevo-gui
 rm -f /usr/bin/mechrevo-ctl /usr/bin/mechrevo-ctld /usr/bin/mechrevo-gui
 
-echo "[*] 移除桌面快捷方式与图标..."
+echo "[*] 移除桌面快捷方式、自启动配置与图标..."
 rm -f /usr/share/applications/mechrevo-control-center.desktop
+rm -f /etc/xdg/autostart/mechrevo-control-center.desktop
+if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  USER_HOME="$(eval echo ~"$SUDO_USER")"
+  rm -f "$USER_HOME/.config/autostart/mechrevo-control-center.desktop"
+fi
 rm -f /usr/share/icons/hicolor/scalable/apps/mechrevo-control-center.svg
 rm -f /usr/share/pixmaps/mechrevo-control-center.svg
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true

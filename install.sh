@@ -76,6 +76,29 @@ if [ -f "gui/mechrevo-control-center.svg" ]; then
   command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
 fi
 
+# 安装桌面用户开机静默自启配置 (XDG Autostart，可通过图形界面底部复选框随时开关)
+if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  USER_HOME="$(eval echo ~"$SUDO_USER")"
+  USER_AUTOSTART_DIR="$USER_HOME/.config/autostart"
+  mkdir -p "$USER_AUTOSTART_DIR"
+  cat << 'EOF' > "$USER_AUTOSTART_DIR/mechrevo-control-center.desktop"
+[Desktop Entry]
+Type=Application
+Name=MECHREVO Control Center
+Name[zh_CN]=机械革命控制中心
+Comment=Hardware power, thermal, battery and performance management for MECHREVO laptops
+Comment[zh_CN]=机械革命笔记本功耗释放、性能模式、风扇强冷与电池养护控制中心
+Exec=mechrevo-gui --minimized
+Icon=mechrevo-control-center
+Terminal=false
+Categories=Settings;HardwareSettings;System;Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+EOF
+  chown -R "$SUDO_USER:" "$USER_AUTOSTART_DIR/mechrevo-control-center.desktop"
+  echo "[+] 已为用户 $SUDO_USER 配置图形控制中心开机静默自启: $USER_AUTOSTART_DIR/mechrevo-control-center.desktop"
+fi
+
 echo "[*] 安装 systemd 守护进程服务与睡眠唤醒钩子..."
 
 # 0. 确保状态持久化存储目录存在
@@ -226,7 +249,8 @@ echo "  - 独显零唤醒探测 (Zero-Wakeup Status)，空载 D3cold 不被打�
 echo "  - 狂暴模式与强冷风扇完全解耦，Turbo 模式由 EC M3T1 曲线平滑接管，避免无谓噪音"
 echo "  - 守护进程作为 root 服务常驻后台，监听电源适配器与硬件状态"
 echo "  - 通过 /run/mechrevo-ctl.sock 本地套接字交互，普通用户【无需 sudo】即可调节硬件"
-echo "  - 支持合盖休眠唤醒自动恢复上次性能档位与安全自愈"
+echo "  - 支持合盖休眠唤醒自动恢复上次性能档位与安全自愈
+  - 全链路开机自启: systemd 守护进程底层常驻 + 控制中心登录静默启动 (托盘后台)"
 echo ""
 echo "常用指令 (普通用户终端直接输入):"
 echo "  mechrevo-gui                       # 启动原生图形化控制中心 (或从系统桌面应用菜单启动)"

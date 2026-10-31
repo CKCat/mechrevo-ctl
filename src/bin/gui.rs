@@ -1,6 +1,7 @@
 //! Native GUI for MECHREVO Control Center.
 //! Ultra-lightweight, high-performance, native Rust GUI using eframe/egui.
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -186,6 +187,34 @@ impl ksni::Tray for MechrevoTray {
     }
 }
 
+pub mod theme {
+    use eframe::egui::Color32;
+
+    // Surface Hierarchy Palette (Modern Dark Theme - VS Code / Linear style)
+    pub const BG_BASE: Color32 = Color32::from_rgb(15, 23, 42);       // #0f172a Main container background
+    pub const BG_PANEL: Color32 = Color32::from_rgb(24, 24, 30);      // #18181e Top title bar & bottom status bar
+    pub const BG_CARD: Color32 = Color32::from_rgb(30, 41, 59);       // #1e293b Elevated feature cards
+    pub const BG_CARD_SUBTLE: Color32 = Color32::from_rgb(20, 28, 42);// Nested tiles
+    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(51, 65, 85); // #334155 Subtle border stroke (1.0px)
+    pub const BORDER_CARD: Color32 = Color32::from_rgb(42, 55, 82);
+
+    // Interactive Controls
+    pub const BTN_INACTIVE_BG: Color32 = Color32::from_rgb(40, 44, 56);  // #282c38 Inactive buttons & chips
+    pub const BTN_HOVERED_BG: Color32 = Color32::from_rgb(55, 65, 81);   // #374151 Hover feedback
+    pub const BTN_ACTIVE_BG: Color32 = Color32::from_rgb(71, 85, 105);   // #475569 Pressed state
+
+    // Accent Colors
+    pub const ACCENT_CYAN: Color32 = Color32::from_rgb(6, 182, 212);    // #06b6d4 Primary brand highlights
+    pub const ACCENT_ORANGE: Color32 = Color32::from_rgb(249, 115, 22);  // #f97316 Fan boost & heavy alerts
+    pub const ACCENT_GREEN: Color32 = Color32::from_rgb(34, 197, 94);   // #22c55e AC online & success badges
+    pub const ACCENT_RED: Color32 = Color32::from_rgb(239, 68, 68);     // #ef4444 Critical warnings & failures
+
+    // Typography
+    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(241, 245, 249);
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(148, 163, 184);
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(100, 116, 139);
+}
+
 enum IpcAction {
     SetProfile(String),
     SetBattery(u32),
@@ -195,9 +224,72 @@ enum IpcAction {
 }
 
 enum IpcResult {
-    Info(SystemInfoReport),
+    Info(Box<SystemInfoReport>),
     ActionResponse { success: bool, message: String },
     Error(String),
+}
+
+/// Classifies CPU temperature into localized status and alert color.
+pub fn classify_cpu_temp(temp: Option<i32>) -> (String, Color32) {
+    match temp {
+        Some(t) if t >= 80 => (format!("{}°C (高温)", t), theme::ACCENT_RED),
+        Some(t) if t >= 65 => (format!("{}°C (温热)", t), theme::ACCENT_ORANGE),
+        Some(t) => (format!("{}°C (正常)", t), theme::ACCENT_CYAN),
+        None => ("--°C".to_string(), theme::TEXT_MUTED),
+    }
+}
+
+/// Classifies GPU temperature into localized status and alert color.
+pub fn classify_gpu_temp(temp: Option<i32>) -> (String, Color32) {
+    match temp {
+        Some(t) if t >= 80 => (format!("{}°C (高温)", t), theme::ACCENT_RED),
+        Some(t) if t >= 65 => (format!("{}°C (温热)", t), theme::ACCENT_ORANGE),
+        Some(t) => (format!("{}°C (清凉)", t), theme::ACCENT_CYAN),
+        None => ("--°C".to_string(), theme::TEXT_MUTED),
+    }
+}
+
+/// Formats CPU PL1/PL2 power limit telemetry. Avoids misleading 0W when readings are unavailable.
+pub fn format_cpu_pl(pl1: Option<f64>, pl2: Option<f64>) -> String {
+    match (pl1, pl2) {
+        (Some(p1), Some(p2)) => format!("PL1: {:.0}W | PL2: {:.0}W", p1, p2),
+        (Some(p1), None) => format!("PL1: {:.0}W | PL2: --W", p1),
+        (None, Some(p2)) => format!("PL1: --W | PL2: {:.0}W", p2),
+        (None, None) => "PL1: --W | PL2: --W".to_string(),
+    }
+}
+
+/// Formats dual cooling fan RPM and boost telemetry description.
+pub fn format_fan_status(fan1: Option<u32>, fan2: Option<u32>, boost: Option<bool>) -> String {
+    match (fan1, fan2) {
+        (Some(f1), Some(f2)) => format!("F1: {} | F2: {} RPM", f1, f2),
+        (Some(f1), None) => format!("F1: {} RPM", f1),
+        (None, Some(f2)) => format!("F2: {} RPM", f2),
+        _ => if boost == Some(true) {
+            "双风扇 100% 满速强冷".to_string()
+        } else {
+            "EC 固件智能调速".to_string()
+        },
+    }
+}
+
+/// Formats GPU power limit telemetry.
+pub fn format_gpu_power(gpu_power_w: Option<f64>) -> String {
+    match gpu_power_w {
+        Some(p) if p > 0.0 => format!("活跃 · 功耗上限 {:.0}W", p),
+        _ => "活跃 · 基础功耗释放".to_string(),
+    }
+}
+
+/// Renders a modern rounded badge pill (Rounding::same(12.0)).
+pub fn render_badge(ui: &mut egui::Ui, text: &str, bg: Color32, fg: Color32) {
+    egui::Frame::none()
+        .fill(bg)
+        .rounding(Rounding::same(12.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).color(fg).strong().size(10.5));
+        });
 }
 
 fn send_ipc_payload(req: &IpcRequest) -> Result<IpcResponse, String> {
@@ -246,8 +338,10 @@ fn parse_status_text(text: &str) -> SystemInfoReport {
     let fan1_rpm = None;
     let fan2_rpm = None;
 
-    let ac_online = std::fs::read_to_string("/sys/class/power_supply/AC0/online")
-        .or_else(|_| std::fs::read_to_string("/sys/class/power_supply/AC/online"))
+    let ac_online = std::fs::read_to_string("/sys/class/power_supply/AC/online")
+        .or_else(|_| std::fs::read_to_string("/sys/class/power_supply/AC0/online"))
+        .or_else(|_| std::fs::read_to_string("/sys/class/power_supply/ADP1/online"))
+        .or_else(|_| std::fs::read_to_string("/sys/class/power_supply/ACAD/online"))
         .map(|s| s.trim() == "1")
         .unwrap_or(true);
 
@@ -436,22 +530,30 @@ fn format_status_message(raw: &str, is_err: bool) -> (String, Option<String>) {
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut font_candidates = vec![
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string(),
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf".to_string(),
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc".to_string(),
+        // 1. WenQuanYi Micro Hei / Zen Hei (Top priority for Linux desktop CJK glyph rendering)
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc".to_string(),
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc".to_string(),
-        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc".to_string(),
+        // 2. Noto Sans CJK SC
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string(),
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc".to_string(),
         "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc".to_string(),
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".to_string(),
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc".to_string(),
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf".to_string(),
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc".to_string(),
         "/usr/share/fonts/truetype/arphic/uming.ttc".to_string(),
         "/usr/share/fonts/truetype/arphic/ukai.ttc".to_string(),
+        // 3. Microsoft YaHei / SimHei (Dual-boot Windows & Wine paths)
+        "/mnt/c/Windows/Fonts/msyh.ttc".to_string(),
+        "/mnt/c/Windows/Fonts/msyhbd.ttc".to_string(),
+        "/mnt/c/Windows/Fonts/simhei.ttf".to_string(),
     ];
 
     if let Ok(home) = std::env::var("HOME") {
         font_candidates.push(format!("{}/.local/share/fonts/NotoSansCJK-Regular.ttc", home));
         font_candidates.push(format!("{}/.local/share/fonts/DroidSansFallbackFull.ttf", home));
+        font_candidates.push(format!("{}/.wine/drive_c/windows/Fonts/msyh.ttc", home));
+        font_candidates.push(format!("{}/.wine/drive_c/windows/Fonts/simhei.ttf", home));
     }
 
     for path in &font_candidates {
@@ -490,9 +592,9 @@ fn render_pill_button(
         )
     } else {
         (
-            Color32::from_rgb(24, 32, 48),
-            Stroke::new(1.0_f32, Color32::from_rgb(46, 60, 84)),
-            Color32::from_rgb(180, 195, 215),
+            theme::BTN_INACTIVE_BG,
+            Stroke::new(1.0_f32, theme::BORDER_SUBTLE),
+            theme::TEXT_SECONDARY,
         )
     };
 
@@ -519,6 +621,105 @@ fn render_pill_button(
     response.clicked()
 }
 
+/// Returns the standard XDG autostart path for the user desktop entry.
+fn get_autostart_path() -> Option<PathBuf> {
+    if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
+        if !config_home.trim().is_empty() {
+            return Some(PathBuf::from(config_home).join("autostart").join("mechrevo-control-center.desktop"));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return Some(PathBuf::from(home).join(".config").join("autostart").join("mechrevo-control-center.desktop"));
+        }
+    }
+    None
+}
+
+/// Parses an autostart desktop entry content to determine if it is actively enabled.
+fn is_autostart_content_enabled(content: &str) -> bool {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("hidden=true")
+            || trimmed.eq_ignore_ascii_case("x-gnome-autostart-enabled=false")
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Checks whether mechrevo-gui is configured to autostart upon user login.
+fn is_autostart_enabled() -> bool {
+    // 1. Check user local autostart file first
+    if let Some(user_path) = get_autostart_path() {
+        if user_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&user_path) {
+                return is_autostart_content_enabled(&content);
+            }
+        }
+    }
+
+    // 2. Check system-wide autostart file
+    let sys_path = Path::new("/etc/xdg/autostart/mechrevo-control-center.desktop");
+    if sys_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(sys_path) {
+            return is_autostart_content_enabled(&content);
+        }
+    }
+
+    false
+}
+
+/// Enables or disables autostart for the GUI desktop application.
+fn set_autostart(enabled: bool) -> Result<(), std::io::Error> {
+    let path = get_autostart_path().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "未找到有效的用户配置目录 (~/.config)")
+    })?;
+
+    let sys_path = Path::new("/etc/xdg/autostart/mechrevo-control-center.desktop");
+    let sys_exists = sys_path.exists();
+
+    if enabled {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = "\
+[Desktop Entry]
+Type=Application
+Name=MECHREVO Control Center
+Name[zh_CN]=机械革命控制中心
+Comment=Hardware power, thermal, battery and performance management for MECHREVO laptops
+Comment[zh_CN]=机械革命笔记本功耗释放、性能模式、风扇强冷与电池养护控制中心
+Exec=mechrevo-gui --minimized
+Icon=mechrevo-control-center
+Terminal=false
+Categories=Settings;HardwareSettings;System;Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+";
+        std::fs::write(&path, content)?;
+    } else if sys_exists {
+        // Mask the system-wide autostart entry with Hidden=true in user directory
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = "\
+[Desktop Entry]
+Type=Application
+Name=MECHREVO Control Center
+Exec=mechrevo-gui --minimized
+Hidden=true
+X-GNOME-Autostart-enabled=false
+";
+        std::fs::write(&path, content)?;
+    } else if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+
+    Ok(())
+}
+
 struct MechrevoGuiApp {
     info: Option<SystemInfoReport>,
     action_tx: Sender<IpcAction>,
@@ -534,6 +735,7 @@ struct MechrevoGuiApp {
     tray_rx: Receiver<TrayCommand>,
     window_visible: bool,
     minimize_to_tray: bool,
+    autostart: bool,
 }
 
 impl MechrevoGuiApp {
@@ -541,12 +743,18 @@ impl MechrevoGuiApp {
         // Setup CJK fallback font for Chinese character rendering
         setup_custom_fonts(&cc.egui_ctx);
 
-        // Customize egui theme
+        // Customize egui theme according to rust-egui-design surface elevation
         let mut visuals = egui::Visuals::dark();
-        visuals.override_text_color = Some(Color32::from_rgb(226, 232, 240));
-        visuals.panel_fill = Color32::from_rgb(16, 20, 29);
-        visuals.window_fill = Color32::from_rgb(16, 20, 29);
+        visuals.override_text_color = Some(theme::TEXT_PRIMARY);
+        visuals.panel_fill = theme::BG_PANEL;
+        visuals.window_fill = theme::BG_BASE;
         cc.egui_ctx.set_visuals(visuals);
+
+        // Standard comfortable button padding and item spacing
+        let mut style = (*cc.egui_ctx.style()).clone();
+        style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        cc.egui_ctx.set_style(style);
 
         let (action_tx, action_rx) = channel::<IpcAction>();
         let (result_tx, result_rx) = channel::<IpcResult>();
@@ -556,14 +764,14 @@ impl MechrevoGuiApp {
         thread::spawn(move || {
             // Initial fetch
             if let Ok(info) = fetch_system_info() {
-                let _ = res_tx_clone.send(IpcResult::Info(info));
+                let _ = res_tx_clone.send(IpcResult::Info(Box::new(info)));
             }
 
             while let Ok(action) = action_rx.recv() {
                 match action {
                     IpcAction::Refresh => match fetch_system_info() {
                         Ok(info) => {
-                            let _ = res_tx_clone.send(IpcResult::Info(info));
+                            let _ = res_tx_clone.send(IpcResult::Info(Box::new(info)));
                         }
                         Err(e) => {
                             let _ = res_tx_clone.send(IpcResult::Error(e));
@@ -578,7 +786,7 @@ impl MechrevoGuiApp {
                                     message: r.message.or(r.error).unwrap_or_default(),
                                 });
                                 if let Ok(info) = fetch_system_info() {
-                                    let _ = res_tx_clone.send(IpcResult::Info(info));
+                                    let _ = res_tx_clone.send(IpcResult::Info(Box::new(info)));
                                 }
                             }
                             Err(e) => {
@@ -595,7 +803,7 @@ impl MechrevoGuiApp {
                                     message: r.message.or(r.error).unwrap_or_default(),
                                 });
                                 if let Ok(info) = fetch_system_info() {
-                                    let _ = res_tx_clone.send(IpcResult::Info(info));
+                                    let _ = res_tx_clone.send(IpcResult::Info(Box::new(info)));
                                 }
                             }
                             Err(e) => {
@@ -612,7 +820,7 @@ impl MechrevoGuiApp {
                                     message: r.message.or(r.error).unwrap_or_default(),
                                 });
                                 if let Ok(info) = fetch_system_info() {
-                                    let _ = res_tx_clone.send(IpcResult::Info(info));
+                                    let _ = res_tx_clone.send(IpcResult::Info(Box::new(info)));
                                 }
                             }
                             Err(e) => {
@@ -629,7 +837,7 @@ impl MechrevoGuiApp {
                                     message: r.message.or(r.error).unwrap_or_default(),
                                 });
                                 if let Ok(info) = fetch_system_info() {
-                                    let _ = res_tx_clone.send(IpcResult::Info(info));
+                                    let _ = res_tx_clone.send(IpcResult::Info(Box::new(info)));
                                 }
                             }
                             Err(e) => {
@@ -676,6 +884,7 @@ impl MechrevoGuiApp {
             tray_rx,
             window_visible: true,
             minimize_to_tray: true,
+            autostart: is_autostart_enabled(),
         }
     }
 }
@@ -761,7 +970,7 @@ impl eframe::App for MechrevoGuiApp {
                             t.battery_th = bat_th;
                         });
                     }
-                    self.info = Some(info);
+                    self.info = Some(*info);
                 }
                 IpcResult::ActionResponse { success, message } => {
                     self.status_message = Some((message, !success, Instant::now()));
@@ -809,14 +1018,15 @@ impl eframe::App for MechrevoGuiApp {
             }
         }
 
-        // Request continuous repaint if window is visible, or deep idle sleep when hidden in tray
-        if self.window_visible {
-            ctx.request_repaint_after(Duration::from_millis(500));
-        } else {
+        // Request continuous repaint if window is visible and auto_refresh is active,
+        // or deep idle sleep when hidden in tray (Rule B: Zero-CPU Idle Scheduling)
+        if !self.window_visible {
             ctx.request_repaint_after(Duration::from_secs(2));
+        } else if self.auto_refresh {
+            ctx.request_repaint_after(Duration::from_millis(500));
         }
 
-        // 1. Bottom Shortcut & Status Bar
+        // 1. Bottom Shortcut & Status Bar (0-CLS Stabilized)
         let (has_status, is_err) = match self.status_message {
             Some((_, err, _)) => (true, err),
             None => (false, false),
@@ -829,17 +1039,17 @@ impl eframe::App for MechrevoGuiApp {
                 Color32::from_rgb(14, 34, 44)
             }
         } else {
-            Color32::from_rgb(18, 24, 34)
+            theme::BG_PANEL
         };
 
         let bottom_stroke = if has_status {
             if is_err {
-                Stroke::new(1.0_f32, Color32::from_rgb(239, 68, 68))
+                Stroke::new(1.0_f32, theme::ACCENT_RED)
             } else {
-                Stroke::new(1.0_f32, Color32::from_rgb(6, 182, 212))
+                Stroke::new(1.0_f32, theme::ACCENT_CYAN)
             }
         } else {
-            Stroke::NONE
+            Stroke::new(1.0_f32, theme::BORDER_SUBTLE)
         };
 
         egui::TopBottomPanel::bottom("bottom_panel")
@@ -850,104 +1060,129 @@ impl eframe::App for MechrevoGuiApp {
                     .inner_margin(egui::Margin::symmetric(16.0, 7.0)),
             )
             .show(ctx, |ui| {
-                if let Some((ref msg, is_err, _)) = self.status_message {
-                    let (title, detail) = format_status_message(msg, is_err);
-                    let (badge_bg, icon, title_color, detail_color) = if is_err {
-                        (
-                            Color32::from_rgb(185, 28, 28),
-                            "⚠ 执行失败",
-                            Color32::from_rgb(254, 202, 202),
-                            Color32::from_rgb(252, 165, 165),
-                        )
-                    } else {
-                        (
-                            Color32::from_rgb(8, 145, 178),
-                            "✔ 生效成功",
-                            Color32::WHITE,
-                            Color32::from_rgb(153, 246, 228),
-                        )
-                    };
+                ui.horizontal(|ui| {
+                    if let Some((ref msg, is_err, _)) = self.status_message {
+                        let (title, detail) = format_status_message(msg, is_err);
+                        let (badge_bg, icon, title_color, detail_color) = if is_err {
+                            (
+                                Color32::from_rgb(185, 28, 28),
+                                "⚠ 执行失败",
+                                Color32::from_rgb(254, 202, 202),
+                                Color32::from_rgb(252, 165, 165),
+                            )
+                        } else {
+                            (
+                                Color32::from_rgb(8, 145, 178),
+                                "✔ 生效成功",
+                                Color32::WHITE,
+                                Color32::from_rgb(153, 246, 228),
+                            )
+                        };
 
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let close_btn = ui.button(
-                                RichText::new("关闭 (Esc)")
-                                    .color(Color32::from_rgb(203, 213, 225))
-                                    .size(11.0),
-                            );
-                            if close_btn.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            if close_btn.clicked() {
-                                self.status_message = None;
-                            }
+                        render_badge(ui, icon, badge_bg, Color32::WHITE);
+                        ui.add_space(4.0);
 
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(format!(" {} ", icon))
-                                        .color(Color32::WHITE)
-                                        .background_color(badge_bg)
-                                        .strong()
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&title)
+                                    .color(title_color)
+                                    .strong()
+                                    .size(12.0),
+                            )
+                            .truncate(true),
+                        );
+
+                        if let Some(ref det) = detail {
+                            ui.add_space(4.0);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("• {}", det))
+                                        .color(detail_color)
                                         .size(11.0),
-                                );
-                                ui.add_space(6.0);
+                                )
+                                .truncate(true),
+                            );
+                        }
 
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&title)
-                                            .color(title_color)
-                                            .strong()
-                                            .size(12.0),
-                                    )
-                                    .truncate(true),
-                                );
-
-                                if let Some(ref det) = detail {
-                                    ui.add_space(4.0);
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(format!("• {}", det))
-                                                .color(detail_color)
-                                                .size(11.0),
-                                        )
-                                        .truncate(true),
-                                    );
-                                }
-                            });
-                        });
-                    });
-                } else {
-                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        let close_btn = ui.small_button(
+                            RichText::new("✕ 关闭")
+                                .color(Color32::from_rgb(203, 213, 225))
+                                .size(10.5),
+                        );
+                        if close_btn.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if close_btn.clicked() {
+                            self.status_message = None;
+                        }
+                    } else {
                         ui.label(
                             RichText::new("快捷键: [1] 狂暴  [2] 平衡  [3] 办公  [B] 强冷  [R/F5] 刷新  [Ctrl+Q] 退出")
-                                .color(Color32::from_rgb(148, 163, 184))
+                                .color(theme::TEXT_SECONDARY)
                                 .size(11.5),
                         );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.checkbox(&mut self.minimize_to_tray, "关闭最小化到托盘");
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new("极光X (GM6IQ0C)")
-                                    .color(Color32::from_rgb(100, 116, 139))
-                                    .size(11.0),
-                            );
-                        });
+                    }
+
+                    // Right anchored controls (Permanent, zero layout shift)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let chassis_str = self
+                            .info
+                            .as_ref()
+                            .map(|i| i.chassis.as_str())
+                            .unwrap_or("MECHREVO Laptop");
+                        ui.label(
+                            RichText::new(chassis_str)
+                                .color(theme::TEXT_MUTED)
+                                .size(11.0),
+                        );
+                        ui.add_space(8.0);
+                        ui.checkbox(&mut self.minimize_to_tray, "关闭最小化到托盘")
+                            .on_hover_text("点击关闭窗口按钮时最小化到系统托盘，而非退出程序");
+                        ui.add_space(8.0);
+
+                        let autostart_resp = ui.checkbox(&mut self.autostart, "开机静默自启");
+                        if autostart_resp.changed() {
+                            match set_autostart(self.autostart) {
+                                Ok(()) => {
+                                    self.status_message = Some((
+                                        if self.autostart {
+                                            "已开启开机静默自启 (登录后后台托盘启动)".to_string()
+                                        } else {
+                                            "已关闭开机自启".to_string()
+                                        },
+                                        false,
+                                        Instant::now(),
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.autostart = !self.autostart;
+                                    self.status_message = Some((
+                                        format!("配置开机自启失败: {}", e),
+                                        true,
+                                        Instant::now(),
+                                    ));
+                                }
+                            }
+                        }
+                        autostart_resp.on_hover_text("开机登录桌面后自动静默启动并常驻系统托盘");
                     });
-                }
+                });
             });
 
         // 2. Top Navigation Bar
         egui::TopBottomPanel::top("top_panel")
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(20, 26, 38))
+                    .fill(theme::BG_PANEL)
+                    .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
                     .inner_margin(egui::Margin::symmetric(16.0, 10.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("MECHREVO")
-                            .color(Color32::from_rgb(0, 242, 254))
+                            .color(theme::ACCENT_CYAN)
                             .strong()
                             .size(16.5),
                     );
@@ -959,14 +1194,14 @@ impl eframe::App for MechrevoGuiApp {
                     );
                     ui.label(
                         RichText::new("v0.2.0")
-                            .color(Color32::from_rgb(100, 116, 139))
+                            .color(theme::TEXT_MUTED)
                             .size(11.0),
                     );
 
                     if let Some(ref info) = self.info {
                         ui.label(
                             RichText::new(format!("• {}", info.chassis))
-                                .color(Color32::from_rgb(148, 163, 184))
+                                .color(theme::TEXT_SECONDARY)
                                 .size(11.5),
                         );
                     }
@@ -987,13 +1222,13 @@ impl eframe::App for MechrevoGuiApp {
                             if info.ac_online {
                                 ui.label(
                                     RichText::new("[AC 适配器供电]")
-                                        .color(Color32::from_rgb(52, 211, 153))
+                                        .color(theme::ACCENT_GREEN)
                                         .size(11.5),
                                 );
                             } else {
                                 ui.label(
                                     RichText::new("[正在使用电池]")
-                                        .color(Color32::from_rgb(251, 191, 36))
+                                        .color(theme::ACCENT_ORANGE)
                                         .size(11.5),
                                 );
                             }
@@ -1006,7 +1241,7 @@ impl eframe::App for MechrevoGuiApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(16, 20, 29))
+                    .fill(theme::BG_BASE)
                     .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
             )
             .show(ctx, |ui| {
@@ -1051,19 +1286,19 @@ impl MechrevoGuiApp {
         let stroke = if is_active {
             Stroke::new(2.0_f32, accent_color)
         } else {
-            Stroke::new(1.0_f32, Color32::from_rgb(42, 55, 82))
+            Stroke::new(1.0_f32, theme::BORDER_CARD)
         };
         let bg = if is_active {
             active_bg
         } else {
-            Color32::from_rgb(26, 35, 54)
+            theme::BG_CARD_SUBTLE
         };
 
         let frame = egui::Frame::none()
             .fill(bg)
             .stroke(stroke)
             .rounding(Rounding::same(8.0_f32))
-            .inner_margin(egui::Margin::same(12.0));
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0));
 
         let card = frame.show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1075,22 +1310,16 @@ impl MechrevoGuiApp {
                 );
                 ui.label(
                     RichText::new(shortcut)
-                        .color(Color32::from_rgb(100, 116, 139))
+                        .color(theme::TEXT_MUTED)
                         .size(11.0),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if is_active {
-                        ui.label(
-                            RichText::new("● 生效中")
-                                .color(Color32::WHITE)
-                                .background_color(accent_color)
-                                .strong()
-                                .size(10.0),
-                        );
+                        render_badge(ui, "● 生效中", accent_color, Color32::WHITE);
                     } else {
                         ui.label(
                             RichText::new("切换")
-                                .color(Color32::from_rgb(148, 163, 184))
+                                .color(theme::TEXT_SECONDARY)
                                 .size(11.0),
                         );
                     }
@@ -1112,8 +1341,8 @@ impl MechrevoGuiApp {
                     .color(if is_active { Color32::WHITE } else { Color32::from_rgb(203, 213, 225) })
                     .size(11.5),
             )
-            .fill(if is_active { accent_color } else { Color32::from_rgb(33, 44, 66) })
-            .rounding(Rounding::same(4.0_f32));
+            .fill(if is_active { accent_color } else { theme::BTN_INACTIVE_BG })
+            .rounding(Rounding::same(6.0_f32));
 
             if ui.add_sized([ui.available_width(), 24.0], btn).clicked() && !is_active {
                 clicked = true;
@@ -1140,22 +1369,22 @@ impl MechrevoGuiApp {
             .unwrap_or("balanced");
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(23, 29, 43))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 50, 72)))
+            .fill(theme::BG_CARD)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
             .rounding(Rounding::same(10.0_f32))
-            .inner_margin(egui::Margin::same(14.0))
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("性能释放模式 (PERFORMANCE PROFILES)")
-                            .color(Color32::from_rgb(148, 163, 184))
+                            .color(theme::TEXT_SECONDARY)
                             .strong()
                             .size(13.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new("点击卡片或按键 [1-3] 极速切换")
-                                .color(Color32::from_rgb(100, 116, 139))
+                                .color(theme::TEXT_MUTED)
                                 .size(11.0),
                         );
                     });
@@ -1175,7 +1404,7 @@ impl MechrevoGuiApp {
                             "EC M3T1 温控曲线接管",
                         ],
                         current_profile == "turbo",
-                        Color32::from_rgb(239, 68, 68),
+                        theme::ACCENT_RED,
                         Color32::from_rgb(45, 22, 25),
                     ) {
                         let _ = self.action_tx.send(IpcAction::SetProfile("turbo".to_string()));
@@ -1193,7 +1422,7 @@ impl MechrevoGuiApp {
                             "独显空载自然沉入 D3cold",
                         ],
                         current_profile == "balanced",
-                        Color32::from_rgb(6, 182, 212),
+                        theme::ACCENT_CYAN,
                         Color32::from_rgb(18, 38, 48),
                     ) {
                         let _ = self.action_tx.send(IpcAction::SetProfile("balanced".to_string()));
@@ -1211,7 +1440,7 @@ impl MechrevoGuiApp {
                             "超长电池待机续航",
                         ],
                         current_profile == "office",
-                        Color32::from_rgb(16, 185, 129),
+                        theme::ACCENT_GREEN,
                         Color32::from_rgb(16, 38, 30),
                     ) {
                         let _ = self.action_tx.send(IpcAction::SetProfile("office".to_string()));
@@ -1224,26 +1453,26 @@ impl MechrevoGuiApp {
         let is_boost = self.info.as_ref().and_then(|i| i.fan_boost).unwrap_or(false);
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(23, 29, 43))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 50, 72)))
+            .fill(theme::BG_CARD)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
             .rounding(Rounding::same(10.0_f32))
-            .inner_margin(egui::Margin::same(14.0))
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("散热与极限强冷 (COOLING & FAN BOOST)")
-                            .color(Color32::from_rgb(148, 163, 184))
+                            .color(theme::TEXT_SECONDARY)
                             .strong()
                             .size(13.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let status_text = if is_boost {
                             RichText::new("[ 100% 满血强冷: ON ]")
-                                .color(Color32::from_rgb(248, 113, 113))
+                                .color(theme::ACCENT_RED)
                                 .strong()
                         } else {
                             RichText::new("[ EC 智能温控: OFF ]")
-                                .color(Color32::from_rgb(148, 163, 184))
+                                .color(theme::TEXT_SECONDARY)
                         };
                         ui.label(status_text);
                     });
@@ -1286,7 +1515,7 @@ impl MechrevoGuiApp {
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new("接管 Uniwill EC RAM 0x0751 强冷寄存器，拉满双风扇 100% 转速；适合 3A 游戏与高压拷机。")
-                                            .color(Color32::from_rgb(148, 163, 184))
+                                            .color(theme::TEXT_SECONDARY)
                                             .size(11.0),
                                     )
                                     .wrap(true),
@@ -1312,22 +1541,22 @@ impl MechrevoGuiApp {
             .unwrap_or((100, "Full", 80));
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(23, 29, 43))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 50, 72)))
+            .fill(theme::BG_CARD)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
             .rounding(Rounding::same(10.0_f32))
-            .inner_margin(egui::Margin::same(14.0))
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("电池健康与充电养护 (BATTERY CONSERVATION)")
-                            .color(Color32::from_rgb(148, 163, 184))
+                            .color(theme::TEXT_SECONDARY)
                             .strong()
                             .size(13.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(format!("当前电量: {}% ({}) | 当前养护上限: {}%", percent, status, current_th))
-                                .color(Color32::from_rgb(148, 163, 184))
+                                .color(theme::TEXT_SECONDARY)
                                 .size(11.5),
                         );
                     });
@@ -1358,13 +1587,13 @@ impl MechrevoGuiApp {
 
                         // Left side: Presets
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.label(RichText::new("预设:").size(12.0).color(Color32::from_rgb(148, 163, 184)));
+                            ui.label(RichText::new("预设:").size(12.0).color(theme::TEXT_SECONDARY));
 
                             if render_pill_button(
                                 ui,
                                 "80% 常年插电",
                                 current_th == 80,
-                                Color32::from_rgb(6, 182, 212),
+                                theme::ACCENT_CYAN,
                             ) {
                                 self.custom_battery_th = 80;
                                 let _ = self.action_tx.send(IpcAction::SetBattery(80));
@@ -1374,7 +1603,7 @@ impl MechrevoGuiApp {
                                 ui,
                                 "100% 满电备战",
                                 current_th == 100,
-                                Color32::from_rgb(16, 185, 129),
+                                theme::ACCENT_GREEN,
                             ) {
                                 self.custom_battery_th = 100;
                                 let _ = self.action_tx.send(IpcAction::SetBattery(100));
@@ -1384,7 +1613,7 @@ impl MechrevoGuiApp {
                                 ui,
                                 "60% 深度养护",
                                 current_th == 60,
-                                Color32::from_rgb(148, 163, 184),
+                                theme::ACCENT_ORANGE,
                             ) {
                                 self.custom_battery_th = 60;
                                 let _ = self.action_tx.send(IpcAction::SetBattery(60));
@@ -1403,22 +1632,22 @@ impl MechrevoGuiApp {
             .unwrap_or(50);
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(23, 29, 43))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 50, 72)))
+            .fill(theme::BG_CARD)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
             .rounding(Rounding::same(10.0_f32))
-            .inner_margin(egui::Margin::same(14.0))
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("键盘多色背光调节 (KEYBOARD BACKLIGHT)")
-                            .color(Color32::from_rgb(148, 163, 184))
+                            .color(theme::TEXT_SECONDARY)
                             .strong()
                             .size(13.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(format!("当前背光: {}%", current_br))
-                                .color(Color32::from_rgb(148, 163, 184))
+                                .color(theme::TEXT_SECONDARY)
                                 .size(11.5),
                         );
                     });
@@ -1453,7 +1682,7 @@ impl MechrevoGuiApp {
                                     _ => false,
                                 };
 
-                                if render_pill_button(ui, label, is_active, Color32::from_rgb(0, 242, 254)) {
+                                if render_pill_button(ui, label, is_active, theme::ACCENT_CYAN) {
                                     self.custom_kbd_br = val;
                                     let _ = self.action_tx.send(IpcAction::SetKeyboard(val));
                                 }
@@ -1466,14 +1695,14 @@ impl MechrevoGuiApp {
 
     fn render_telemetry_section(&mut self, ui: &mut egui::Ui) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(23, 29, 43))
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 50, 72)))
+            .fill(theme::BG_CARD)
+            .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE))
             .rounding(Rounding::same(10.0_f32))
-            .inner_margin(egui::Margin::same(14.0))
+            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new("实时硬件传感器与状态遥测 (LIVE TELEMETRY)")
-                        .color(Color32::from_rgb(148, 163, 184))
+                        .color(theme::TEXT_SECONDARY)
                         .strong()
                         .size(13.0),
                 );
@@ -1482,95 +1711,83 @@ impl MechrevoGuiApp {
                 ui.columns(3, |columns| {
                     // CPU Tile
                     egui::Frame::none()
-                        .fill(Color32::from_rgb(18, 24, 36))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(30, 41, 60)))
+                        .fill(theme::BG_CARD_SUBTLE)
+                        .stroke(Stroke::new(1.0_f32, theme::BORDER_CARD))
                         .rounding(Rounding::same(6.0_f32))
-                        .inner_margin(egui::Margin::same(10.0))
+                        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
                         .show(&mut columns[0], |ui| {
-                            ui.label(RichText::new("中央处理器 (CPU)").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            ui.label(RichText::new("中央处理器 (CPU)").color(theme::TEXT_MUTED).size(11.0));
                             ui.add_space(2.0);
                             if let Some(ref info) = self.info {
-                                let pl1 = info.cpu_pl1_w.unwrap_or(0.0);
-                                let pl2 = info.cpu_pl2_w.unwrap_or(0.0);
-                                ui.label(RichText::new(format!("PL1: {:.0}W | PL2: {:.0}W", pl1, pl2)).color(Color32::WHITE).strong().size(13.0));
+                                let pl_str = format_cpu_pl(info.cpu_pl1_w, info.cpu_pl2_w);
+                                ui.label(RichText::new(pl_str).color(Color32::WHITE).strong().monospace().size(12.5));
                                 
-                                let (temp_str, temp_color) = match info.cpu_temp_c {
-                                    Some(t) if t >= 80 => (format!("{}°C (高温)", t), Color32::from_rgb(248, 113, 113)),
-                                    Some(t) if t >= 65 => (format!("{}°C (温热)", t), Color32::from_rgb(251, 191, 36)),
-                                    Some(t) => (format!("{}°C (正常)", t), Color32::from_rgb(56, 189, 248)),
-                                    None => ("--°C".to_string(), Color32::from_rgb(148, 163, 184)),
-                                };
+                                let (temp_str, temp_color) = classify_cpu_temp(info.cpu_temp_c);
                                 let epp = info.cpu_epp.as_deref().unwrap_or("balance");
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(format!("温度: {}", temp_str)).color(temp_color).size(11.0));
-                                    ui.label(RichText::new(format!("EPP: {}", epp)).color(Color32::from_rgb(148, 163, 184)).size(11.0));
+                                    ui.label(RichText::new(format!("温度: {}", temp_str)).color(temp_color).monospace().size(11.0));
+                                    ui.label(RichText::new(format!("EPP: {}", epp)).color(theme::TEXT_SECONDARY).size(11.0));
                                 });
                             } else {
-                                ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
+                                ui.label(RichText::new("读取中...").color(theme::TEXT_MUTED));
                             }
                         });
 
                     // GPU Tile
                     egui::Frame::none()
-                        .fill(Color32::from_rgb(18, 24, 36))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(30, 41, 60)))
+                        .fill(theme::BG_CARD_SUBTLE)
+                        .stroke(Stroke::new(1.0_f32, theme::BORDER_CARD))
                         .rounding(Rounding::same(6.0_f32))
-                        .inner_margin(egui::Margin::same(10.0))
+                        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
                         .show(&mut columns[1], |ui| {
-                            ui.label(RichText::new("独立显卡 (RTX 4060)").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            let gpu_title = self.info.as_ref()
+                                .and_then(|i| i.gpu_name.as_deref())
+                                .unwrap_or("独立显卡 (NVIDIA dGPU)");
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(gpu_title)
+                                        .color(theme::TEXT_MUTED)
+                                        .size(11.0),
+                                )
+                                .truncate(true),
+                            );
                             ui.add_space(2.0);
                             if let Some(ref info) = self.info {
                                 if info.gpu_d3cold {
-                                    ui.label(RichText::new("● PCIe RTD3 深度休眠").color(Color32::from_rgb(52, 211, 153)).strong().size(13.0));
-                                    ui.label(RichText::new("0W 功耗 · 零发热零耗电待机").color(Color32::from_rgb(148, 163, 184)).size(11.0));
+                                    ui.label(RichText::new("● PCIe RTD3 深度休眠").color(theme::ACCENT_GREEN).strong().size(12.5));
+                                    ui.label(RichText::new("0W 功耗 · 零发热零耗电待机").color(theme::TEXT_SECONDARY).size(11.0));
                                 } else {
-                                    let p_str = match info.gpu_power_w {
-                                        Some(p) if p > 0.0 => format!("活跃 · 功耗上限 {:.0}W", p),
-                                        _ => "活跃 · 基础功耗释放".to_string(),
-                                    };
-                                    ui.label(RichText::new(p_str).color(Color32::WHITE).strong().size(13.0));
+                                    let p_str = format_gpu_power(info.gpu_power_w);
+                                    ui.label(RichText::new(p_str).color(Color32::WHITE).strong().monospace().size(12.5));
 
-                                    let (temp_str, temp_color) = match info.gpu_temp_c {
-                                        Some(t) if t >= 80 => (format!("{}°C (高温)", t), Color32::from_rgb(248, 113, 113)),
-                                        Some(t) if t >= 65 => (format!("{}°C (温热)", t), Color32::from_rgb(251, 191, 36)),
-                                        Some(t) => (format!("{}°C (清凉)", t), Color32::from_rgb(56, 189, 248)),
-                                        None => ("--°C".to_string(), Color32::from_rgb(148, 163, 184)),
-                                    };
-                                    ui.label(RichText::new(format!("核心温度: {}", temp_str)).color(temp_color).size(11.0));
+                                    let (temp_str, temp_color) = classify_gpu_temp(info.gpu_temp_c);
+                                    ui.label(RichText::new(format!("核心温度: {}", temp_str)).color(temp_color).monospace().size(11.0));
                                 }
                             } else {
-                                ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
+                                ui.label(RichText::new("读取中...").color(theme::TEXT_MUTED));
                             }
                         });
 
                     // Power / Fans Tile
                     egui::Frame::none()
-                        .fill(Color32::from_rgb(18, 24, 36))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(30, 41, 60)))
+                        .fill(theme::BG_CARD_SUBTLE)
+                        .stroke(Stroke::new(1.0_f32, theme::BORDER_CARD))
                         .rounding(Rounding::same(6.0_f32))
-                        .inner_margin(egui::Margin::same(10.0))
+                        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
                         .show(&mut columns[2], |ui| {
-                            ui.label(RichText::new("供电输入与双风扇").color(Color32::from_rgb(100, 116, 139)).size(11.0));
+                            ui.label(RichText::new("供电输入与双风扇").color(theme::TEXT_MUTED).size(11.0));
                             ui.add_space(2.0);
                             if let Some(ref info) = self.info {
                                 if info.ac_online {
-                                    ui.label(RichText::new("● 原装适配器已连接").color(Color32::from_rgb(52, 211, 153)).strong().size(12.5));
+                                    ui.label(RichText::new("● 原装适配器已连接").color(theme::ACCENT_GREEN).strong().size(12.5));
                                 } else {
-                                    ui.label(RichText::new("● 正在使用电池供电").color(Color32::from_rgb(251, 191, 36)).strong().size(12.5));
+                                    ui.label(RichText::new("● 正在使用电池供电").color(theme::ACCENT_ORANGE).strong().size(12.5));
                                 }
 
-                                let fan_str = match (info.fan1_rpm, info.fan2_rpm) {
-                                    (Some(f1), Some(f2)) => format!("F1: {} | F2: {} RPM", f1, f2),
-                                    (Some(f1), None) => format!("F1: {} RPM", f1),
-                                    _ => if info.fan_boost == Some(true) {
-                                        "双风扇 100% 满速强冷".to_string()
-                                    } else {
-                                        "EC 固件智能调速".to_string()
-                                    },
-                                };
-                                ui.label(RichText::new(fan_str).color(Color32::from_rgb(56, 189, 248)).size(11.0));
+                                let fan_str = format_fan_status(info.fan1_rpm, info.fan2_rpm, info.fan_boost);
+                                ui.label(RichText::new(fan_str).color(theme::ACCENT_CYAN).monospace().size(11.0));
                             } else {
-                                ui.label(RichText::new("读取中...").color(Color32::from_rgb(148, 163, 184)));
+                                ui.label(RichText::new("读取中...").color(theme::TEXT_MUTED));
                             }
                         });
                 });
@@ -1632,12 +1849,52 @@ mod tests {
         assert_eq!(info.active_profile, "balanced");
         assert_eq!(info.gpu_power_w, Some(0.0));
         assert_eq!(info.gpu_temp_c, Some(51));
-        assert_eq!(info.gpu_d3cold, false);
+        assert!(!info.gpu_d3cold);
         assert_eq!(info.battery_percent, Some(100));
         assert_eq!(info.battery_status.as_deref(), Some("Full"));
         assert_eq!(info.battery_threshold, Some(80));
         assert_eq!(info.keyboard_brightness, Some(50));
         assert_eq!(info.fan_boost, Some(false));
+    }
+
+    #[test]
+    fn test_telemetry_pure_functions() {
+        // CPU PL formatting
+        assert_eq!(format_cpu_pl(Some(75.0), Some(90.0)), "PL1: 75W | PL2: 90W");
+        assert_eq!(format_cpu_pl(Some(105.0), None), "PL1: 105W | PL2: --W");
+        assert_eq!(format_cpu_pl(None, None), "PL1: --W | PL2: --W");
+
+        // CPU & GPU Temperature Classification
+        let (cpu_str, cpu_color) = classify_cpu_temp(Some(85));
+        assert_eq!(cpu_str, "85°C (高温)");
+        assert_eq!(cpu_color, theme::ACCENT_RED);
+
+        let (cpu_str_warn, cpu_color_warn) = classify_cpu_temp(Some(70));
+        assert_eq!(cpu_str_warn, "70°C (温热)");
+        assert_eq!(cpu_color_warn, theme::ACCENT_ORANGE);
+
+        let (cpu_str_norm, cpu_color_norm) = classify_cpu_temp(Some(55));
+        assert_eq!(cpu_str_norm, "55°C (正常)");
+        assert_eq!(cpu_color_norm, theme::ACCENT_CYAN);
+
+        let (gpu_str_cool, gpu_color_cool) = classify_gpu_temp(Some(45));
+        assert_eq!(gpu_str_cool, "45°C (清凉)");
+        assert_eq!(gpu_color_cool, theme::ACCENT_CYAN);
+
+        let (none_str, none_color) = classify_cpu_temp(None);
+        assert_eq!(none_str, "--°C");
+        assert_eq!(none_color, theme::TEXT_MUTED);
+
+        // Fan RPM and Boost formatting
+        assert_eq!(format_fan_status(Some(2400), Some(2600), Some(false)), "F1: 2400 | F2: 2600 RPM");
+        assert_eq!(format_fan_status(Some(3000), None, Some(false)), "F1: 3000 RPM");
+        assert_eq!(format_fan_status(None, None, Some(true)), "双风扇 100% 满速强冷");
+        assert_eq!(format_fan_status(None, None, Some(false)), "EC 固件智能调速");
+
+        // GPU Power formatting
+        assert_eq!(format_gpu_power(Some(140.0)), "活跃 · 功耗上限 140W");
+        assert_eq!(format_gpu_power(Some(0.0)), "活跃 · 基础功耗释放");
+        assert_eq!(format_gpu_power(None), "活跃 · 基础功耗释放");
     }
 
     #[test]
@@ -1693,5 +1950,20 @@ mod tests {
         let (title, detail) = format_status_message("Permission denied when writing battery threshold", true);
         assert!(title.contains("电池充电养护阈值配置失败") || title.contains("权限不足"));
         assert!(detail.is_some());
+    }
+
+    #[test]
+    fn test_autostart_content_parsing() {
+        let normal = "[Desktop Entry]\nType=Application\nExec=mechrevo-gui --minimized\n";
+        assert!(is_autostart_content_enabled(normal));
+
+        let hidden = "[Desktop Entry]\nType=Application\nHidden=true\nExec=mechrevo-gui --minimized\n";
+        assert!(!is_autostart_content_enabled(hidden));
+
+        let gnome_disabled = "[Desktop Entry]\nType=Application\nX-GNOME-Autostart-enabled=false\n";
+        assert!(!is_autostart_content_enabled(gnome_disabled));
+
+        let gnome_enabled = "[Desktop Entry]\nType=Application\nX-GNOME-Autostart-enabled=true\n";
+        assert!(is_autostart_content_enabled(gnome_enabled));
     }
 }
