@@ -34,7 +34,7 @@ apt-get install -y tuxedo-drivers
 
 # 3.5 解除 TUXEDO 驱动对非 TUXEDO 品牌 DMI (MECHREVO 极光X) 的白名单拦截并补齐 fan_boost 硬件接口
 echo "[*] 正在解除 TUXEDO DKMS 驱动白名单拦截并激活 fan_boost 硬件节点..."
-SRC_DIR=$(ls -d /usr/src/tuxedo-drivers-* 2>/dev/null | head -n 1)
+SRC_DIR=$(ls -d /usr/src/tuxedo-drivers-* 2>/dev/null | sort -V | tail -n 1)
 if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR" ]; then
   TUXEDO_VER=$(basename "$SRC_DIR" | sed 's/tuxedo-drivers-//')
   COMPAT_FILE="$SRC_DIR/tuxedo_compatibility_check/tuxedo_compatibility_check.c"
@@ -47,7 +47,13 @@ if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR" ]; then
     else
       cp "$COMPAT_FILE" "${COMPAT_FILE}.bak"
     fi
-    python3 -c "import re, sys; p = sys.argv[1]; c = open(p).read(); open(p, 'w').write(re.sub(r'bool tuxedo_is_compatible\(void\) \{[\s\S]*?\n\}', 'bool tuxedo_is_compatible(void) {\n\treturn true;\n}', c))" "$COMPAT_FILE"
+    python3 -c "
+import re, sys
+p = sys.argv[1]
+c = open(p).read()
+c = re.sub(r'bool\s+tuxedo_is_compatible\s*\(\s*void\s*\)\s*\{[\s\S]*?\n\}\s*\nEXPORT_SYMBOL', 'bool tuxedo_is_compatible(void) {\n\treturn true;\n}\nEXPORT_SYMBOL', c)
+open(p, 'w').write(c)
+" "$COMPAT_FILE"
   fi
 
   if [ -f "$TK_FILE" ]; then
@@ -56,7 +62,13 @@ if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR" ]; then
     else
       cp "$TK_FILE" "${TK_FILE}.bak"
     fi
-    python3 -c "import sys; p = sys.argv[1]; c = open(p).read(); open(p, 'w').write(c.replace('if (!tuxedo_is_compatible())\n\t\treturn -ENODEV;', '// bypass compatibility check'))" "$TK_FILE"
+    python3 -c "
+import re, sys
+p = sys.argv[1]
+c = open(p).read()
+c = re.sub(r'if\s*\(!tuxedo_is_compatible\(\)\)\s*return\s+-ENODEV;', '// bypass compatibility check', c)
+open(p, 'w').write(c)
+" "$TK_FILE"
   fi
 
   if [ -f "$UWK_FILE" ]; then

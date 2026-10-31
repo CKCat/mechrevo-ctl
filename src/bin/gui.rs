@@ -188,8 +188,30 @@ fn fetch_system_info() -> Result<SystemInfoReport, String> {
     Err(resp.error.unwrap_or_else(|| "获取硬件数据失败".to_string()))
 }
 
-fn format_status_message(raw: &str) -> (String, Option<String>) {
-    if raw.contains("Successfully applied profile 'turbo'") {
+fn format_status_message(raw: &str, is_err: bool) -> (String, Option<String>) {
+    if is_err {
+        if raw.contains("charge_control") || raw.contains("Battery") || raw.contains("battery") {
+            (
+                "电池充电养护阈值配置失败: 硬件节点不可用".to_string(),
+                Some("当前 Linux 内核未挂载 Uniwill/Tuxedo 电池扩展驱动，可运行 sudo ./scripts/setup-tuxedo-drivers.sh 激活".to_string()),
+            )
+        } else if raw.contains("fan_boost") || raw.contains("Fan boost") || raw.contains("fan-boost") {
+            (
+                "散热强冷配置失败: 硬件节点不可用".to_string(),
+                Some("请在终端运行 sudo ./scripts/setup-tuxedo-drivers.sh 激活 EC 强冷控制".to_string()),
+            )
+        } else if raw.contains("Permission denied") {
+            (
+                "操作权限不足: 请求被系统拒绝".to_string(),
+                Some("请确保 mechrevo-ctld 守护进程正在以 root 身份运行".to_string()),
+            )
+        } else {
+            (
+                "操作执行失败".to_string(),
+                Some(raw.to_string()),
+            )
+        }
+    } else if raw.contains("Successfully applied profile 'turbo'") {
         (
             "已成功切换至【狂暴满血模式】(CPU 105W / GPU 140W)".to_string(),
             Some("散热由 EC 固件智能接管，如需极速降温可随时按键 [B] 开启 100% 强冷".to_string()),
@@ -204,14 +226,29 @@ fn format_status_message(raw: &str) -> (String, Option<String>) {
             "已成功切换至【办公静音模式】(CPU 45W / 独显 D3cold 断电 0W)".to_string(),
             Some("核心调频锁定节能 EPP，最大限度减少机身发热并延长电池续航".to_string()),
         )
-    } else if raw.contains("Battery threshold") || raw.contains("battery") {
+    } else if raw.contains("Battery charge threshold set to") || raw.contains("Battery threshold") {
+        let th = raw
+            .split("set to ")
+            .nth(1)
+            .and_then(|s| s.split('%').next())
+            .unwrap_or("80");
         (
-            format!("电池充电养护阈值已配置: {}", raw),
+            format!("已成功配置电池充电养护阈值: {}%", th),
             Some("已持久化存储至 state.json，关机断电后自动恢复".to_string()),
         )
     } else if raw.contains("fan-boost") || raw.contains("Fan boost") || raw.contains("FanBoost") {
         (
-            format!("散热强冷状态更新: {}", raw),
+            "散热强冷状态已更新".to_string(),
+            Some(raw.to_string()),
+        )
+    } else if raw.contains("Keyboard brightness set to") {
+        let br = raw
+            .split("set to ")
+            .nth(1)
+            .and_then(|s| s.split('%').next())
+            .unwrap_or("50");
+        (
+            format!("已成功设置键盘背光亮度: {}%", br),
             None,
         )
     } else {
@@ -530,7 +567,7 @@ impl eframe::App for MechrevoGuiApp {
             )
             .show(ctx, |ui| {
                 if let Some((ref msg, is_err, _)) = self.status_message {
-                    let (title, detail) = format_status_message(msg);
+                    let (title, detail) = format_status_message(msg, is_err);
                     let (badge_bg, icon, title_color, detail_color) = if is_err {
                         (
                             Color32::from_rgb(185, 28, 28),
@@ -571,11 +608,14 @@ impl eframe::App for MechrevoGuiApp {
                                 );
                                 ui.add_space(6.0);
 
-                                ui.label(
-                                    RichText::new(&title)
-                                        .color(title_color)
-                                        .strong()
-                                        .size(12.0),
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&title)
+                                            .color(title_color)
+                                            .strong()
+                                            .size(12.0),
+                                    )
+                                    .truncate(true),
                                 );
 
                                 if let Some(ref det) = detail {
@@ -1338,5 +1378,26 @@ mod tests {
                 });
             }
         }
+    }
+
+    #[test]
+    fn test_format_status_message() {
+        // Success scenarios
+        let (title, detail) = format_status_message("Successfully applied profile 'turbo'", false);
+        assert!(title.contains("狂暴满血模式"));
+        assert!(detail.is_some());
+
+        let (title, detail) = format_status_message("Battery charge threshold set to 80%", false);
+        assert_eq!(title, "已成功配置电池充电养护阈值: 80%");
+        assert!(detail.unwrap().contains("state.json"));
+
+        // Error scenarios
+        let (title, detail) = format_status_message("Hardware sysfs node or interface not accessible: Sysfs node not found: /sys/class/power_supply/BAT0/charge_control_end_threshold", true);
+        assert_eq!(title, "电池充电养护阈值配置失败: 硬件节点不可用");
+        assert!(detail.unwrap().contains("setup-tuxedo-drivers.sh"));
+
+        let (title, detail) = format_status_message("Permission denied when writing battery threshold", true);
+        assert!(title.contains("电池充电养护阈值配置失败") || title.contains("权限不足"));
+        assert!(detail.is_some());
     }
 }
