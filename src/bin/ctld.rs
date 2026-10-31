@@ -11,10 +11,13 @@ fn run_daemon() -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixListener;
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use mechrevo::daemon::DEFAULT_SOCKET_PATH;
+
+    const MAX_CONCURRENT_CLIENTS: usize = 16;
+    let active_clients = Arc::new(AtomicUsize::new(0));
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -172,9 +175,29 @@ fn run_daemon() -> std::io::Result<()> {
             if let Some(pfd) = poll_fds.iter().find(|p| p.fd == l_fd) {
                 if (pfd.revents & libc::POLLIN) != 0 {
                     while let Ok((mut stream, _)) = l.accept() {
+                        let current_clients = active_clients.load(Ordering::Relaxed);
+                        if current_clients >= MAX_CONCURRENT_CLIENTS {
+                            eprintln!(
+                                "[!] Warning: Max concurrent IPC clients ({}) reached, dropping connection.",
+                                MAX_CONCURRENT_CLIENTS
+                            );
+                            let _ = stream.shutdown(std::net::Shutdown::Both);
+                            continue;
+                        }
+
+                        active_clients.fetch_add(1, Ordering::SeqCst);
+                        let clients_counter = active_clients.clone();
                         let daemon_clone = daemon.clone();
                         // Spawn isolated worker thread with 1.0s timeout to prevent Slowloris DoS
                         std::thread::spawn(move || {
+                            struct ClientGuard(Arc<AtomicUsize>);
+                            impl Drop for ClientGuard {
+                                fn drop(&mut self) {
+                                    self.0.fetch_sub(1, Ordering::SeqCst);
+                                }
+                            }
+                            let _guard = ClientGuard(clients_counter);
+
                             // 显式切为阻塞模式，确保 1.0s 超时在所有 Unix 平台与内核版本均 100% 生效
                             let _ = stream.set_nonblocking(false);
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));

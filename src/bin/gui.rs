@@ -294,6 +294,7 @@ enum IpcAction {
     SetBattery(u32),
     SetKeyboard(u32),
     SetFanBoost(bool),
+    SetAutostart(bool),
     Refresh,
 }
 
@@ -651,48 +652,55 @@ fn setup_custom_fonts(ctx: &egui::Context) {
     }
 }
 
-/// Renders a clickable preset pill button with active indicator
+/// Renders a clickable preset pill button with active indicator and hover feedback
 fn render_pill_button(
     ui: &mut egui::Ui,
     label: &str,
     is_active: bool,
     accent_color: Color32,
 ) -> bool {
-    let (bg, stroke, text_color) = if is_active {
-        (
-            Color32::from_rgb(26, 44, 66),
-            Stroke::new(1.5_f32, accent_color),
-            Color32::WHITE,
+    let mut clicked = false;
+    ui.scope(|ui| {
+        let visuals = ui.visuals_mut();
+        if is_active {
+            visuals.widgets.inactive.bg_fill = Color32::from_rgb(26, 44, 66);
+            visuals.widgets.inactive.bg_stroke = Stroke::new(1.5_f32, accent_color);
+            visuals.widgets.hovered.bg_fill = Color32::from_rgb(34, 58, 88);
+            visuals.widgets.hovered.bg_stroke = Stroke::new(1.5_f32, accent_color);
+        } else {
+            visuals.widgets.inactive.bg_fill = theme::BTN_INACTIVE_BG;
+            visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, theme::BORDER_SUBTLE);
+            visuals.widgets.hovered.bg_fill = theme::BTN_HOVERED_BG;
+            visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, theme::BORDER_SUBTLE);
+        }
+
+        let text_color = if is_active {
+            Color32::WHITE
+        } else {
+            theme::TEXT_SECONDARY
+        };
+
+        let display_text = if is_active {
+            format!("✔ {}", label)
+        } else {
+            label.to_string()
+        };
+
+        let button = egui::Button::new(
+            RichText::new(display_text)
+                .color(text_color)
+                .strong()
+                .size(11.0),
         )
-    } else {
-        (
-            theme::BTN_INACTIVE_BG,
-            Stroke::new(1.0_f32, theme::BORDER_SUBTLE),
-            theme::TEXT_SECONDARY,
-        )
-    };
+        .rounding(Rounding::same(6.0_f32));
 
-    let display_text = if is_active {
-        format!("✔ {}", label)
-    } else {
-        label.to_string()
-    };
-
-    let button = egui::Button::new(
-        RichText::new(display_text)
-            .color(text_color)
-            .strong()
-            .size(11.0),
-    )
-    .fill(bg)
-    .stroke(stroke)
-    .rounding(Rounding::same(6.0_f32));
-
-    let response = ui.add(button);
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    response.clicked()
+        let response = ui.add(button);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        clicked = response.clicked();
+    });
+    clicked
 }
 
 /// Returns the standard XDG autostart path for the user desktop entry.
@@ -822,6 +830,27 @@ impl MechrevoGuiApp {
         visuals.override_text_color = Some(theme::TEXT_PRIMARY);
         visuals.panel_fill = theme::BG_PANEL;
         visuals.window_fill = theme::BG_BASE;
+
+        // Configure widget styling tokens according to rust-egui-design
+        visuals.widgets.noninteractive.bg_fill = theme::BG_CARD;
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, theme::BORDER_SUBTLE);
+        visuals.widgets.noninteractive.rounding = Rounding::same(6.0_f32);
+
+        visuals.widgets.inactive.bg_fill = theme::BTN_INACTIVE_BG;
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, theme::BORDER_SUBTLE);
+        visuals.widgets.inactive.rounding = Rounding::same(6.0_f32);
+
+        visuals.widgets.hovered.bg_fill = theme::BTN_HOVERED_BG;
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, theme::ACCENT_CYAN);
+        visuals.widgets.hovered.rounding = Rounding::same(6.0_f32);
+
+        visuals.widgets.active.bg_fill = theme::BTN_ACTIVE_BG;
+        visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, theme::BORDER_SUBTLE);
+        visuals.widgets.active.rounding = Rounding::same(6.0_f32);
+
+        visuals.selection.bg_fill = theme::ACCENT_CYAN;
+        visuals.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
+
         cc.egui_ctx.set_visuals(visuals);
 
         // Standard comfortable button padding and item spacing
@@ -916,6 +945,27 @@ impl MechrevoGuiApp {
                             }
                             Err(e) => {
                                 let _ = res_tx_clone.send(IpcResult::Error(e));
+                            }
+                        }
+                    }
+                    IpcAction::SetAutostart(enabled) => {
+                        match set_autostart(enabled) {
+                            Ok(()) => {
+                                let msg = if enabled {
+                                    "已开启开机静默自启 (登录后后台托盘启动)".to_string()
+                                } else {
+                                    "已关闭开机自启".to_string()
+                                };
+                                let _ = res_tx_clone.send(IpcResult::ActionResponse {
+                                    success: true,
+                                    message: msg,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = res_tx_clone.send(IpcResult::Error(format!(
+                                    "配置开机自启失败: {}",
+                                    e
+                                )));
                             }
                         }
                     }
@@ -1220,27 +1270,7 @@ impl eframe::App for MechrevoGuiApp {
 
                         let autostart_resp = ui.checkbox(&mut self.autostart, "开机静默自启");
                         if autostart_resp.changed() {
-                            match set_autostart(self.autostart) {
-                                Ok(()) => {
-                                    self.status_message = Some((
-                                        if self.autostart {
-                                            "已开启开机静默自启 (登录后后台托盘启动)".to_string()
-                                        } else {
-                                            "已关闭开机自启".to_string()
-                                        },
-                                        false,
-                                        Instant::now(),
-                                    ));
-                                }
-                                Err(e) => {
-                                    self.autostart = !self.autostart;
-                                    self.status_message = Some((
-                                        format!("配置开机自启失败: {}", e),
-                                        true,
-                                        Instant::now(),
-                                    ));
-                                }
-                            }
+                            let _ = self.action_tx.send(IpcAction::SetAutostart(self.autostart));
                         }
                         autostart_resp.on_hover_text("开机登录桌面后自动静默启动并常驻系统托盘");
                     });
