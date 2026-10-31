@@ -6,7 +6,185 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
+use ksni::blocking::TrayMethods;
 use mechrevo::daemon::{IpcRequest, IpcResponse, SystemInfoReport, DEFAULT_SOCKET_PATH};
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum TrayCommand {
+    ToggleWindow,
+    ShowWindow,
+    HideWindow,
+    SetProfile(String),
+    SetFanBoost(bool),
+    SetBattery(u32),
+    Quit,
+}
+
+#[derive(Clone)]
+struct MechrevoTray {
+    active_profile: String,
+    fan_boost: bool,
+    cpu_temp: Option<i32>,
+    gpu_temp: Option<i32>,
+    battery_th: Option<u32>,
+    ac_online: bool,
+    tray_tx: Sender<TrayCommand>,
+    ctx: egui::Context,
+}
+
+impl ksni::Tray for MechrevoTray {
+    fn id(&self) -> String {
+        "mechrevo-control-center".to_string()
+    }
+
+    fn category(&self) -> ksni::Category {
+        ksni::Category::Hardware
+    }
+
+    fn title(&self) -> String {
+        "机械革命控制中心".to_string()
+    }
+
+    fn status(&self) -> ksni::Status {
+        ksni::Status::Active
+    }
+
+    fn icon_name(&self) -> String {
+        "mechrevo-control-center".to_string()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        if let Ok(home) = std::env::var("HOME") {
+            let local_dir = format!("{}/.local/share/icons/hicolor/scalable/apps", home);
+            if std::path::Path::new(&local_dir).exists() {
+                return local_dir;
+            }
+        }
+        "/usr/share/icons/hicolor/scalable/apps".to_string()
+    }
+
+    fn tool_tip(&self) -> ksni::ToolTip {
+        let prof_name = match self.active_profile.as_str() {
+            "turbo" => "狂暴满血 (105W/140W)",
+            "office" => "办公静音 (45W/0W)",
+            _ => "日常平衡 (75W/115W)",
+        };
+        let cpu_str = self.cpu_temp.map(|t| format!("{}°C", t)).unwrap_or_else(|| "--".to_string());
+        let gpu_str = self.gpu_temp.map(|t| format!("{}°C", t)).unwrap_or_else(|| "--".to_string());
+        let pwr_str = if self.ac_online { "AC 适配器供电" } else { "电池供电" };
+        let boost_str = if self.fan_boost { " | 强冷开启" } else { "" };
+
+        ksni::ToolTip {
+            title: format!("机械革命控制中心 - {}", prof_name),
+            description: format!("CPU: {} | GPU: {} | {}{}", cpu_str, gpu_str, pwr_str, boost_str),
+            icon_name: "mechrevo-control-center".to_string(),
+            icon_pixmap: Vec::new(),
+        }
+    }
+
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.tray_tx.send(TrayCommand::ToggleWindow);
+        self.ctx.request_repaint();
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::*;
+
+        let tx = self.tray_tx.clone();
+        let ctx = self.ctx.clone();
+
+        let make_cb = |cmd: TrayCommand| -> Box<dyn Fn(&mut Self) + Send> {
+            let tx = tx.clone();
+            let ctx = ctx.clone();
+            Box::new(move |_: &mut Self| {
+                let _ = tx.send(cmd.clone());
+                ctx.request_repaint();
+            })
+        };
+
+        let current_prof = self.active_profile.clone();
+        let current_boost = self.fan_boost;
+
+        vec![
+            StandardItem {
+                label: if current_prof == "turbo" { "● 狂暴满血 (Turbo) [生效中]".to_string() } else { "   狂暴满血 (Turbo)".to_string() },
+                enabled: true,
+                visible: true,
+                activate: make_cb(TrayCommand::SetProfile("turbo".to_string())),
+                ..Default::default()
+            }.into(),
+            StandardItem {
+                label: if current_prof == "balanced" { "● 日常平衡 (Balanced) [生效中]".to_string() } else { "   日常平衡 (Balanced)".to_string() },
+                enabled: true,
+                visible: true,
+                activate: make_cb(TrayCommand::SetProfile("balanced".to_string())),
+                ..Default::default()
+            }.into(),
+            StandardItem {
+                label: if current_prof == "office" { "● 办公静音 (Office) [生效中]".to_string() } else { "   办公静音 (Office)".to_string() },
+                enabled: true,
+                visible: true,
+                activate: make_cb(TrayCommand::SetProfile("office".to_string())),
+                ..Default::default()
+            }.into(),
+            MenuItem::Separator,
+            CheckmarkItem {
+                label: "双风扇 100% 极限强冷 (Fan Boost)".to_string(),
+                enabled: true,
+                visible: true,
+                checked: current_boost,
+                activate: make_cb(TrayCommand::SetFanBoost(!current_boost)),
+                ..Default::default()
+            }.into(),
+            MenuItem::Separator,
+            SubMenu {
+                label: "电池健康与充电养护".to_string(),
+                enabled: true,
+                visible: true,
+                submenu: vec![
+                    StandardItem {
+                        label: "80% 常年插电养护".to_string(),
+                        enabled: true,
+                        visible: true,
+                        activate: make_cb(TrayCommand::SetBattery(80)),
+                        ..Default::default()
+                    }.into(),
+                    StandardItem {
+                        label: "100% 满电出行备战".to_string(),
+                        enabled: true,
+                        visible: true,
+                        activate: make_cb(TrayCommand::SetBattery(100)),
+                        ..Default::default()
+                    }.into(),
+                    StandardItem {
+                        label: "60% 深度存放养护".to_string(),
+                        enabled: true,
+                        visible: true,
+                        activate: make_cb(TrayCommand::SetBattery(60)),
+                        ..Default::default()
+                    }.into(),
+                ],
+                ..Default::default()
+            }.into(),
+            MenuItem::Separator,
+            StandardItem {
+                label: "🖥 打开控制中心主界面".to_string(),
+                enabled: true,
+                visible: true,
+                activate: make_cb(TrayCommand::ShowWindow),
+                ..Default::default()
+            }.into(),
+            StandardItem {
+                label: "✕ 彻底退出".to_string(),
+                enabled: true,
+                visible: true,
+                activate: make_cb(TrayCommand::Quit),
+                ..Default::default()
+            }.into(),
+        ]
+    }
+}
 
 enum IpcAction {
     SetProfile(String),
@@ -351,6 +529,11 @@ struct MechrevoGuiApp {
     custom_battery_th: u32,
     custom_kbd_br: u32,
     is_loading: bool,
+    // Tray and window lifecycle
+    tray_handle: Option<ksni::blocking::Handle<MechrevoTray>>,
+    tray_rx: Receiver<TrayCommand>,
+    window_visible: bool,
+    minimize_to_tray: bool,
 }
 
 impl MechrevoGuiApp {
@@ -458,6 +641,27 @@ impl MechrevoGuiApp {
             }
         });
 
+        // Initialize system tray integration
+        let (tray_tx, tray_rx) = channel::<TrayCommand>();
+        let tray = MechrevoTray {
+            active_profile: "balanced".to_string(),
+            fan_boost: false,
+            cpu_temp: None,
+            gpu_temp: None,
+            battery_th: Some(80),
+            ac_online: true,
+            tray_tx,
+            ctx: cc.egui_ctx.clone(),
+        };
+
+        let tray_handle = match tray.spawn() {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                eprintln!("[!] 启动系统托盘服务失败 (非致命警告): {}", e);
+                None
+            }
+        };
+
         Self {
             info: None,
             action_tx,
@@ -468,12 +672,72 @@ impl MechrevoGuiApp {
             custom_battery_th: 80,
             custom_kbd_br: 50,
             is_loading: false,
+            tray_handle,
+            tray_rx,
+            window_visible: true,
+            minimize_to_tray: true,
         }
     }
 }
 
 impl eframe::App for MechrevoGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Process incoming commands from system tray
+        while let Ok(cmd) = self.tray_rx.try_recv() {
+            match cmd {
+                TrayCommand::ToggleWindow => {
+                    self.window_visible = !self.window_visible;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.window_visible));
+                    if self.window_visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
+                TrayCommand::ShowWindow => {
+                    self.window_visible = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                TrayCommand::HideWindow => {
+                    self.window_visible = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+                TrayCommand::SetProfile(profile) => {
+                    let _ = self.action_tx.send(IpcAction::SetProfile(profile));
+                }
+                TrayCommand::SetFanBoost(enabled) => {
+                    let _ = self.action_tx.send(IpcAction::SetFanBoost(enabled));
+                }
+                TrayCommand::SetBattery(threshold) => {
+                    let _ = self.action_tx.send(IpcAction::SetBattery(threshold));
+                }
+                TrayCommand::Quit => {
+                    if let Some(ref handle) = self.tray_handle {
+                        let _ = handle.shutdown();
+                    }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
+        // Intercept window close request to minimize to tray if enabled
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.minimize_to_tray && self.tray_handle.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.window_visible = false;
+            } else if let Some(ref handle) = self.tray_handle {
+                let _ = handle.shutdown();
+            }
+        }
+
+        // Global Ctrl+Q shortcut to cleanly exit application
+        if ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Q)) {
+            if let Some(ref handle) = self.tray_handle {
+                let _ = handle.shutdown();
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         // Poll incoming responses from background worker
         while let Ok(res) = self.result_rx.try_recv() {
             self.is_loading = false;
@@ -481,6 +745,22 @@ impl eframe::App for MechrevoGuiApp {
                 IpcResult::Info(info) => {
                     self.custom_battery_th = info.battery_threshold.unwrap_or(self.custom_battery_th);
                     self.custom_kbd_br = info.keyboard_brightness.unwrap_or(self.custom_kbd_br);
+                    if let Some(ref handle) = self.tray_handle {
+                        let prof = info.active_profile.clone();
+                        let boost = info.fan_boost.unwrap_or(false);
+                        let cpu_t = info.cpu_temp_c;
+                        let gpu_t = info.gpu_temp_c;
+                        let ac = info.ac_online;
+                        let bat_th = info.battery_threshold;
+                        let _ = handle.update(|t| {
+                            t.active_profile = prof;
+                            t.fan_boost = boost;
+                            t.cpu_temp = cpu_t;
+                            t.gpu_temp = gpu_t;
+                            t.ac_online = ac;
+                            t.battery_th = bat_th;
+                        });
+                    }
                     self.info = Some(info);
                 }
                 IpcResult::ActionResponse { success, message } => {
@@ -529,8 +809,12 @@ impl eframe::App for MechrevoGuiApp {
             }
         }
 
-        // Request continuous repaint if auto-refresh is active
-        ctx.request_repaint_after(Duration::from_millis(500));
+        // Request continuous repaint if window is visible, or deep idle sleep when hidden in tray
+        if self.window_visible {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(2));
+        }
 
         // 1. Bottom Shortcut & Status Bar
         let (has_status, is_err) = match self.status_message {
@@ -635,13 +919,15 @@ impl eframe::App for MechrevoGuiApp {
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("快捷键: [1] 狂暴  [2] 平衡  [3] 办公  [B] 强冷  [R/F5] 刷新  [Esc] 关闭提示")
+                            RichText::new("快捷键: [1] 狂暴  [2] 平衡  [3] 办公  [B] 强冷  [R/F5] 刷新  [Ctrl+Q] 退出")
                                 .color(Color32::from_rgb(148, 163, 184))
                                 .size(11.5),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.checkbox(&mut self.minimize_to_tray, "关闭最小化到托盘");
+                            ui.add_space(8.0);
                             ui.label(
-                                RichText::new("机械革命 极光X (GM6IQ0C) · Linux 原生控制引擎")
+                                RichText::new("极光X (GM6IQ0C)")
                                     .color(Color32::from_rgb(100, 116, 139))
                                     .size(11.0),
                             );
@@ -1293,18 +1579,26 @@ impl MechrevoGuiApp {
 }
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let start_minimized = args.iter().any(|a| a == "--minimized" || a == "--tray");
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size(Vec2::new(880.0, 720.0))
             .with_min_inner_size(Vec2::new(800.0, 600.0))
-            .with_title("机械革命控制中心 - MECHREVO Control Center"),
+            .with_title("机械革命控制中心 - MECHREVO Control Center")
+            .with_visible(!start_minimized),
         ..Default::default()
     };
 
     eframe::run_native(
         "mechrevo-gui",
         native_options,
-        Box::new(|cc| Box::new(MechrevoGuiApp::new(cc))),
+        Box::new(move |cc| {
+            let mut app = MechrevoGuiApp::new(cc);
+            app.window_visible = !start_minimized;
+            Box::new(app)
+        }),
     )
 }
 

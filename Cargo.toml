@@ -29,6 +29,7 @@ serde_json = "1.0.154"
 thiserror = "2.0.21"
 ctrlc = "3.4"
 eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+ksni = { version = "0.3", features = ["blocking"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

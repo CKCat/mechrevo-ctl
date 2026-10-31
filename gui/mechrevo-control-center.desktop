@@ -11,4 +11,11 @@ Categories=Settings;HardwareSettings;System;Utility;
 Keywords=mechrevo;gaming;performance;rapl;fan;battery;backlight;turbo;
 StartupNotify=true
 StartupWMClass=mechrevo-gui
+Actions=Tray;
+
+[Desktop Action Tray]
+Name=Start Minimized in System Tray
+Name[zh_CN]=在托盘后台静默启动
+Exec=mechrevo-gui --minimized
+
 
