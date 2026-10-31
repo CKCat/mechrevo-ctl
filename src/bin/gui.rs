@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
-use ksni::blocking::TrayMethods;
+use ksni::blocking::{Handle as TrayHandle, TrayMethods};
 use mechrevo::daemon::{IpcRequest, IpcResponse, SystemInfoReport, DEFAULT_SOCKET_PATH};
 
 #[derive(Clone, Debug)]
@@ -530,7 +530,7 @@ struct MechrevoGuiApp {
     custom_kbd_br: u32,
     is_loading: bool,
     // Tray and window lifecycle
-    tray_handle: Option<ksni::blocking::Handle<MechrevoTray>>,
+    tray_handle: Option<TrayHandle<MechrevoTray>>,
     tray_rx: Receiver<TrayCommand>,
     window_visible: bool,
     minimize_to_tray: bool,
