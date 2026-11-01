@@ -37,11 +37,11 @@ fn run_daemon() -> std::io::Result<()> {
         Ok(l) => {
             // Set 0666 permissions so desktop users can adjust hardware without sudo
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o666));
-            println!("[+] IPC UNIX socket bound: {}", socket_path);
+            tracing::info!("IPC UNIX socket bound: {}", socket_path);
             Some(l)
         }
         Err(e) => {
-            eprintln!("[!] Warning: Failed to bind UNIX socket {}: {}", socket_path, e);
+            tracing::warn!("Failed to bind UNIX socket {}: {}", socket_path, e);
             None
         }
     };
@@ -74,10 +74,10 @@ fn run_daemon() -> std::io::Result<()> {
                 )
             };
             if bind_res == 0 {
-                println!("[+] Kernel Netlink UEvent listener: ENABLED (zero-polling energy saving)");
+                tracing::info!("Kernel Netlink UEvent listener: ENABLED (zero-polling energy saving)");
                 Some(fd)
             } else {
-                eprintln!("[!] Warning: Failed to bind Netlink socket: errno {}", unsafe { *libc::__errno_location() });
+                tracing::warn!("Failed to bind Netlink socket: errno {}", unsafe { *libc::__errno_location() });
                 unsafe { libc::close(fd) };
                 None
             }
@@ -95,7 +95,7 @@ fn run_daemon() -> std::io::Result<()> {
         Some(socket_path.to_string()),
     )));
 
-    println!("[*] MECHREVO control daemon running (Rust native event-driven engine).");
+    tracing::info!("MECHREVO control daemon running (Rust native event-driven engine).");
     {
         let mut d = daemon.lock().unwrap();
         d.evaluate_ac_state();
@@ -177,8 +177,8 @@ fn run_daemon() -> std::io::Result<()> {
                     while let Ok((mut stream, _)) = l.accept() {
                         let current_clients = active_clients.load(Ordering::Relaxed);
                         if current_clients >= MAX_CONCURRENT_CLIENTS {
-                            eprintln!(
-                                "[!] Warning: Max concurrent IPC clients ({}) reached, dropping connection.",
+                            tracing::warn!(
+                                "Max concurrent IPC clients ({}) reached, dropping connection.",
                                 MAX_CONCURRENT_CLIENTS
                             );
                             let _ = stream.shutdown(std::net::Shutdown::Both);
@@ -234,7 +234,7 @@ fn run_daemon() -> std::io::Result<()> {
     if path.exists() {
         let _ = fs::remove_file(path);
     }
-    println!("[*] MECHREVO control daemon stopped.");
+    tracing::info!("MECHREVO control daemon stopped.");
     Ok(())
 }
 
@@ -242,11 +242,18 @@ fn run_daemon() -> std::io::Result<()> {
 fn run_daemon() -> std::io::Result<()> {
     let ctx = SysfsContext::new();
     let mut daemon = MechrevoDaemon::new(ctx, None);
-    println!("[*] MECHREVO control daemon running in stub/non-unix mode.");
+    tracing::info!("MECHREVO control daemon running in stub/non-unix mode.");
     daemon.evaluate_ac_state();
     Ok(())
 }
 
 fn main() -> std::io::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     run_daemon()
 }

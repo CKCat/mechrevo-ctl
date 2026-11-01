@@ -142,12 +142,12 @@ impl MechrevoDaemon {
                 if let Ok(content) = std::fs::read_to_string(&target) {
                     if let Ok(state) = serde_json::from_str::<DaemonState>(&content) {
                         if let Some(threshold) = state.charge_threshold {
-                            println!("[+] Restored battery threshold from disk: {}%", threshold);
+                            tracing::info!("Restored battery threshold from disk: {}%", threshold);
                             self.persisted_charge_threshold = Some(threshold);
                             let _ = self.battery_drv.set_charge_threshold(threshold);
                         }
                         if let Some(ref profile) = state.manual_profile {
-                            println!("[+] Restored manual profile lock from disk: {}", profile);
+                            tracing::info!("Restored manual profile lock from disk: {}", profile);
                             self.manual_profile_override = Some(profile.clone());
                             self.last_active_profile = profile.clone();
                         }
@@ -493,11 +493,11 @@ impl MechrevoDaemon {
                     .manual_profile_override
                     .clone()
                     .unwrap_or_else(|| "balanced".to_string());
-                println!("[*] AC adapter connected -> Applying {} profile", target);
+                tracing::info!("AC adapter connected -> Applying {} profile", target);
                 let _ = self.profile_mgr.apply_profile(&target);
                 self.last_active_profile = target;
             } else {
-                println!("[*] On battery power -> Applying office power saving profile");
+                tracing::info!("On battery power -> Applying office power saving profile");
                 let _ = self.profile_mgr.apply_profile("office");
                 self.last_active_profile = "office".to_string();
             }
