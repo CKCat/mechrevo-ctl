@@ -142,7 +142,7 @@ impl NvidiaSmiDriver {
 
         let output = Command::new(&self.binary_path)
             .args([
-                "--query-gpu=name,power.limit,power.max_limit,temperature.gpu",
+                "--query-gpu=name,enforced.power.limit,power.limit,power.default_limit,power.max_limit,temperature.gpu",
                 "--format=csv,noheader,nounits",
             ])
             .output()
@@ -164,7 +164,7 @@ impl NvidiaSmiDriver {
         })?;
 
         let parts: Vec<&str> = first_line.split(',').map(|s| s.trim()).collect();
-        if parts.len() < 4 {
+        if parts.len() < 6 {
             return Err(MechrevoError::HardwareInterface(format!(
                 "Unexpected nvidia-smi output format: {}",
                 first_line
@@ -190,9 +190,21 @@ impl NvidiaSmiDriver {
         };
 
         let name = parts[0].to_string();
-        let current_pl = parse_float(parts[1], 0.0);
-        let max_pl = parse_float(parts[2], 140.0);
-        let temp = parse_int(parts[3], 0);
+        let enforced_pl = parse_float(parts[1], 0.0);
+        let requested_pl = parse_float(parts[2], 0.0);
+        let default_pl = parse_float(parts[3], 0.0);
+        let max_pl = parse_float(parts[4], 140.0);
+        let temp = parse_int(parts[5], 0);
+
+        let current_pl = if requested_pl > 0.0 {
+            requested_pl
+        } else if enforced_pl > 0.0 {
+            enforced_pl
+        } else if default_pl > 0.0 {
+            default_pl
+        } else {
+            max_pl
+        };
 
         let is_mobile_or_boost = name.to_lowercase().contains("laptop")
             || name.to_lowercase().contains("mobile")
