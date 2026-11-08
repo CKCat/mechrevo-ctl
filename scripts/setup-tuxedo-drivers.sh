@@ -116,11 +116,22 @@ open(p, 'w').write(c)
 " "$UWK_FILE"
   fi
 
-  echo "[*] 正在清理旧构建缓存并重新编译 DKMS 驱动 (tuxedo-drivers/$TUXEDO_VER)..."
-  dkms unbuild "tuxedo-drivers/$TUXEDO_VER" -k "$(uname -r)" 2>/dev/null || true
-  dkms build "tuxedo-drivers/$TUXEDO_VER" -k "$(uname -r)"
-  dkms install "tuxedo-drivers/$TUXEDO_VER" -k "$(uname -r)" --force
-  echo "[+] DKMS 驱动重编并安装完成。"
+  echo "[*] 正在为系统所有内核编译并安装 DKMS 驱动 (tuxedo-drivers/$TUXEDO_VER)..."
+  for kdir in /lib/modules/*; do
+    [ -d "$kdir" ] || continue
+    kver=$(basename "$kdir")
+    if [ -d "/lib/modules/$kver/build" ] || [ -d "/usr/src/linux-headers-$kver" ]; then
+      echo "    -> 正在构建内核模块: $kver ..."
+      dkms unbuild "tuxedo-drivers/$TUXEDO_VER" -k "$kver" 2>/dev/null || true
+      dkms build "tuxedo-drivers/$TUXEDO_VER" -k "$kver" || true
+      dkms install "tuxedo-drivers/$TUXEDO_VER" -k "$kver" --force || true
+    fi
+  done
+  echo "[+] DKMS 驱动已为所有内核构建并安装完成。"
+
+  # 锁定软件包版本，避免 apt upgrade 自动覆盖驱动源码与补丁
+  echo "[*] 正在锁定 tuxedo-drivers 软件包版本 (apt-mark hold)..."
+  apt-mark hold tuxedo-drivers 2>/dev/null || true
 fi
 
 # 4. 加载驱动模块并配置开机自启
@@ -159,16 +170,37 @@ modprobe tuxedo_nb04_kbd_backlight 2>/dev/null || true
 modprobe tuxedo_nb04_power_profiles 2>/dev/null || true
 
 MODULES_CONF="/etc/modules-load.d/mechrevo.conf"
-if [ -f "$MODULES_CONF" ]; then
-  for mod in tuxedo_compatibility_check tuxedo_keyboard tuxedo_io uniwill_wmi tuxedo_nb04_wmi_ab tuxedo_nb04_power_profiles; do
-    if ! grep -q "^$mod$" "$MODULES_CONF"; then
-      echo "$mod" >> "$MODULES_CONF"
+echo "[*] 正在写入规范的开机内核模块加载配置 ($MODULES_CONF)..."
+cat << 'EOF' > "$MODULES_CONF"
+# MECHREVO Power & Thermal Control Modules
+msr
+intel_rapl_msr
+tuxedo_compatibility_check
+tuxedo_keyboard
+tuxedo_io
+uniwill_wmi
+EOF
+
+# 5. 更新 systemd 服务单元并配置自愈 ExecStartPre
+echo "[*] 5/6 正在更新 systemd 服务定义以确立开机自愈机制..."
+SERVICE_SRC="$(dirname "$0")/../systemd/mechrevo-ctl.service"
+if [ -f "$SERVICE_SRC" ]; then
+  cp "$SERVICE_SRC" /etc/systemd/system/mechrevo-ctl.service
+  systemctl daemon-reload
+fi
+
+# 同步最新编译二进制文件至 /usr/local/bin
+TARGET_DIR="$(dirname "$0")/../target/release"
+if [ -d "$TARGET_DIR" ]; then
+  for bin in mechrevo-ctl mechrevo-ctld mechrevo-gui; do
+    if [ -f "$TARGET_DIR/$bin" ]; then
+      cp "$TARGET_DIR/$bin" "/usr/local/bin/$bin"
     fi
   done
 fi
 
-# 5. 重启 mechrevo-ctl 守护进程以立即重新探测并绑定新节点
-echo "[*] 5/5 正在重启 mechrevo-ctl.service 守护进程..."
+# 6. 重启 mechrevo-ctl 守护进程以立即重新探测并绑定新节点
+echo "[*] 6/6 正在重启 mechrevo-ctl.service 守护进程..."
 systemctl restart mechrevo-ctl.service
 
 echo ""

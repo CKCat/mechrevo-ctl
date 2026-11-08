@@ -144,7 +144,12 @@ impl MechrevoDaemon {
                         if let Some(threshold) = state.charge_threshold {
                             tracing::info!("Restored battery threshold from disk: {}%", threshold);
                             self.persisted_charge_threshold = Some(threshold);
-                            let _ = self.battery_drv.set_charge_threshold(threshold);
+                            if let Err(e) = self.battery_drv.set_charge_threshold(threshold) {
+                                tracing::warn!(
+                                    "Failed initial apply of battery threshold: {} (will auto-sync once driver sysfs node is ready)",
+                                    e
+                                );
+                            }
                         }
                         if let Some(ref profile) = state.manual_profile {
                             tracing::info!("Restored manual profile lock from disk: {}", profile);
@@ -500,6 +505,22 @@ impl MechrevoDaemon {
                 tracing::info!("On battery power -> Applying office power saving profile");
                 let _ = self.profile_mgr.apply_profile("office");
                 self.last_active_profile = "office".to_string();
+            }
+        }
+
+        // Automatically sync persisted battery threshold if hardware is currently out of sync
+        // (handles late-probing DKMS drivers, cold-boot EC reset, and AC plug state changes)
+        if let Some(thresh) = self.persisted_charge_threshold {
+            if let Ok(status) = self.battery_drv.get_battery_status() {
+                if status.charge_threshold != thresh {
+                    if let Ok(()) = self.battery_drv.set_charge_threshold(thresh) {
+                        tracing::info!(
+                            "Synchronized battery charge threshold to {}% (hardware was {}%)",
+                            thresh,
+                            status.charge_threshold
+                        );
+                    }
+                }
             }
         }
     }
@@ -1062,6 +1083,26 @@ mod tests {
         assert_eq!(info.battery_threshold, Some(80));
         assert_eq!(info.cpu_pl1_w, Some(75.0));
         assert_eq!(info.cpu_pl2_w, Some(90.0));
+    }
+
+    #[test]
+    fn test_daemon_auto_sync_persisted_battery_threshold() {
+        let dir = tempdir().unwrap();
+        let ctx = SysfsContext::with_root(dir.path());
+        let bat0 = ctx.resolve("/sys/class/power_supply/BAT0");
+        std::fs::create_dir_all(&bat0).unwrap();
+        std::fs::write(bat0.join("capacity"), "85\n").unwrap();
+        std::fs::write(bat0.join("status"), "Discharging\n").unwrap();
+        let thresh_node = bat0.join("charge_control_end_threshold");
+        std::fs::write(&thresh_node, "100\n").unwrap();
+
+        let mut daemon = MechrevoDaemon::new(ctx.clone(), None);
+        daemon.persisted_charge_threshold = Some(80);
+
+        // Hardware is currently at 100, but persisted is 80.
+        daemon.evaluate_ac_state();
+
+        assert_eq!(std::fs::read_to_string(&thresh_node).unwrap().trim(), "80");
     }
 }
 

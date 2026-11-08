@@ -6,6 +6,12 @@ Conflicts=power-profiles-daemon.service
 
 [Service]
 Type=simple
+ExecStartPre=-/sbin/modprobe msr
+ExecStartPre=-/sbin/modprobe intel_rapl_msr
+ExecStartPre=-/sbin/modprobe tuxedo_compatibility_check
+ExecStartPre=-/sbin/modprobe tuxedo_keyboard
+ExecStartPre=-/sbin/modprobe tuxedo_io
+ExecStartPre=-/sbin/modprobe uniwill_wmi
 ExecStart=/usr/local/bin/mechrevo-ctld
 Restart=on-failure
 RestartSec=3s
