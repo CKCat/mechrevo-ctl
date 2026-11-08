@@ -61,6 +61,17 @@ install -m 755 target/release/mechrevo-ctl "$BIN_DIR/mechrevo-ctl"
 install -m 755 target/release/mechrevo-ctld "$BIN_DIR/mechrevo-ctld"
 install -m 755 target/release/mechrevo-gui "$BIN_DIR/mechrevo-gui"
 
+# 清理可能残留于普通用户 ~/.local/bin 中的同名影子二进制，防止 PATH 环境变量覆盖系统最新版本
+if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+  USER_HOME="$(eval echo ~"$SUDO_USER")"
+  for old_bin in mechrevo-ctl mechrevo-ctld mechrevo-gui; do
+    if [ -f "$USER_HOME/.local/bin/$old_bin" ]; then
+      echo "[*] 清理残留影子文件: $USER_HOME/.local/bin/$old_bin (统一定位至 $BIN_DIR)"
+      rm -f "$USER_HOME/.local/bin/$old_bin"
+    fi
+  done
+fi
+
 echo "[*] 安装桌面应用程序启动器与图标..."
 if [ -f "gui/mechrevo-control-center.desktop" ]; then
   mkdir -p /usr/share/applications

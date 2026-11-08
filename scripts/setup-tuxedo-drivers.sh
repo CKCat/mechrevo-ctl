@@ -189,7 +189,7 @@ if [ -f "$SERVICE_SRC" ]; then
   systemctl daemon-reload
 fi
 
-# 同步最新编译二进制文件至 /usr/local/bin
+# 同步最新编译二进制文件至 /usr/local/bin 并清理用户目录影子文件
 TARGET_DIR="$(dirname "$0")/../target/release"
 if [ -d "$TARGET_DIR" ]; then
   for bin in mechrevo-ctl mechrevo-ctld mechrevo-gui; do
@@ -197,6 +197,10 @@ if [ -d "$TARGET_DIR" ]; then
       cp "$TARGET_DIR/$bin" "/usr/local/bin/$bin"
     fi
   done
+  if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    USER_HOME="$(eval echo ~"$SUDO_USER")"
+    rm -f "$USER_HOME/.local/bin/mechrevo-ctl" "$USER_HOME/.local/bin/mechrevo-ctld" "$USER_HOME/.local/bin/mechrevo-gui" 2>/dev/null || true
+  fi
 fi
 
 # 6. 重启 mechrevo-ctl 守护进程以立即重新探测并绑定新节点
