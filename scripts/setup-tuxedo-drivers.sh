@@ -207,12 +207,15 @@ if [ -f "$SERVICE_SRC" ]; then
   systemctl daemon-reload
 fi
 
+# 暂时停止正在运行的旧守护进程，杜绝覆写时报 Text file busy
+systemctl stop mechrevo-ctl.service 2>/dev/null || true
+
 # 同步最新编译二进制文件至 /usr/local/bin 并清理用户目录影子文件
 TARGET_DIR="$(dirname "$0")/../target/release"
 if [ -d "$TARGET_DIR" ]; then
   for bin in mechrevo-ctl mechrevo-ctld mechrevo-gui; do
     if [ -f "$TARGET_DIR/$bin" ]; then
-      cp "$TARGET_DIR/$bin" "/usr/local/bin/$bin"
+      install -m 755 "$TARGET_DIR/$bin" "/usr/local/bin/$bin"
     fi
   done
   if [ -n "$SUDO_USER" ] && id "$SUDO_USER" >/dev/null 2>&1; then

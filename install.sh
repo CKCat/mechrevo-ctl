@@ -56,6 +56,9 @@ if [ ! -d "$BIN_DIR" ]; then
   BIN_DIR="/usr/bin"
 fi
 
+# 暂时停止正在运行的守护进程，避免覆写时报 Text file busy
+systemctl stop mechrevo-ctl.service 2>/dev/null || true
+
 echo "[*] 安装原生二进制文件至 $BIN_DIR..."
 install -m 755 target/release/mechrevo-ctl "$BIN_DIR/mechrevo-ctl"
 install -m 755 target/release/mechrevo-ctld "$BIN_DIR/mechrevo-ctld"
