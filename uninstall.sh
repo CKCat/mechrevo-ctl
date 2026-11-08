@@ -34,10 +34,11 @@ if [ -f "/etc/systemd/system/mechrevo-ctl.service" ]; then
   systemctl daemon-reload
 fi
 
-# 2. 移除系统睡眠与唤醒恢复钩子
-echo "[*] 清理系统睡眠恢复钩子..."
+# 2. 移除系统睡眠与唤醒恢复钩子及内核更新钩子
+echo "[*] 清理系统睡眠恢复钩子与内核更新钩子..."
 rm -f /usr/lib/systemd/system-sleep/mechrevo-ctl-resume.sh
 rm -f /lib/systemd/system-sleep/mechrevo-ctl-resume.sh
+rm -f /etc/kernel/postinst.d/zz-mechrevo-dkms
 
 # 3. 移除原生二进制可执行文件与 GUI 桌面集成
 echo "[*] 移除可执行文件 (mechrevo-ctl, mechrevo-ctld & mechrevo-gui)..."

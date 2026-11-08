@@ -132,6 +132,24 @@ open(p, 'w').write(c)
   # 锁定软件包版本，避免 apt upgrade 自动覆盖驱动源码与补丁
   echo "[*] 正在锁定 tuxedo-drivers 软件包版本 (apt-mark hold)..."
   apt-mark hold tuxedo-drivers 2>/dev/null || true
+
+  # 部署内核自动升级 postinst 守护钩子，确保未来系统升级新内核时自动编译适配
+  echo "[*] 正在安装内核自动更新持久化钩子 (/etc/kernel/postinst.d/zz-mechrevo-dkms)..."
+  mkdir -p /etc/kernel/postinst.d
+  cat << 'EOF' > /etc/kernel/postinst.d/zz-mechrevo-dkms
+#!/bin/sh
+# MECHREVO Tuxedo DKMS Auto-sync Hook on Kernel Updates
+KVER="$1"
+[ -n "$KVER" ] || exit 0
+
+if [ -x /usr/sbin/dkms ]; then
+  if ! /usr/sbin/dkms status tuxedo-drivers -k "$KVER" 2>/dev/null | grep -q "installed"; then
+    echo "[mechrevo-dkms] 检测到新安装内核 $KVER，正在自动构建并安装 tuxedo-drivers..."
+    /usr/sbin/dkms autoinstall -k "$KVER" 2>/dev/null || true
+  fi
+fi
+EOF
+  chmod 755 /etc/kernel/postinst.d/zz-mechrevo-dkms
 fi
 
 # 4. 加载驱动模块并配置开机自启
